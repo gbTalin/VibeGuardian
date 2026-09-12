@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Guardian Unit</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f172a'/%3E%3Cpath d='M16 6l8 3.2v6.4c0 5-3.4 9.3-8 10.4-4.6-1.1-8-5.4-8-10.4V9.2L16 6z' fill='none' stroke='%2338bdf8' stroke-width='2.2' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <path
+            d="M16 4l10 4v8c0 6.3-4.3 11.7-10 13C10.3 27.7 6 22.3 6 16V8l10-4z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linejoin="round"
+          />
+          <path d="M11 16l3.5 3.5L21 13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div>
+          <div class="brand-name">Guardian Unit</div>
+          <div class="brand-sub" id="version">local security review</div>
+        </div>
+      </div>
+
+      <div class="privacy-pill" id="privacy-pill" title="Where your code goes during a scan">
+        <span class="dot" id="privacy-dot"></span>
+        <span id="privacy-text">Checking…</span>
+      </div>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab is-active" data-view="scan" role="tab">Scan</button>
+        <button class="tab" data-view="checks" role="tab">Checks</button>
+        <button class="tab" data-view="agents" role="tab">Agents</button>
+        <button class="tab" data-view="history" role="tab">History</button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- ================= SCAN ================= -->
+      <section class="view is-active" id="view-scan">
+        <!-- Setup card, shown before the first scan -->
+        <div class="card setup" id="setup">
+          <h1>Check your software for security problems</h1>
+          <p class="lede">
+            Point Guardian Unit at a folder on this machine. It reads your code, configuration,
+            dependencies, and build pipelines, then tells you what is wrong, what an
+            attacker would do with it, and exactly how to fix it.
+          </p>
+
+          <div class="field">
+            <label for="path">Folder to check</label>
+            <div class="path-row">
+              <input id="path" type="text" spellcheck="false" autocomplete="off" />
+              <button class="btn-ghost" id="browse">Browse…</button>
+            </div>
+            <p class="hint">Anything Guardian Unit reads stays on this machine.</p>
+          </div>
+
+          <details class="options">
+            <summary>Options</summary>
+            <div class="options-body">
+              <label class="check">
+                <input type="checkbox" id="opt-agents" />
+                <span>
+                  <strong>Have security agents review the findings</strong>
+                  <em id="agents-hint">Needs a model. Set one up below.</em>
+                </span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="opt-network" />
+                <span>
+                  <strong>Allow network access</strong>
+                  <em>Looks up known vulnerabilities for your dependencies. Off by default.</em>
+                </span>
+              </label>
+              <div class="field">
+                <label for="domains">Domains you own (optional)</label>
+                <input id="domains" type="text" placeholder="example.com, app.example.com" spellcheck="false" />
+                <p class="hint">
+                  Guardian Unit will check these for missing security headers and exposed files.
+                  Only enter domains you are authorised to test.
+                </p>
+              </div>
+            </div>
+          </details>
+
+          <button class="btn-primary btn-lg" id="run">Run the security check</button>
+          <p class="hint center" id="scanner-count"></p>
+        </div>
+
+        <!-- Progress -->
+        <div class="card progress" id="progress" hidden>
+          <div class="spinner"></div>
+          <div class="progress-body">
+            <div class="progress-msg" id="progress-msg">Starting…</div>
+            <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" hidden>
+          <div class="posture" id="posture">
+            <div class="posture-main">
+              <div class="posture-label" id="posture-label"></div>
+              <div class="posture-detail" id="posture-detail"></div>
+            </div>
+            <div class="posture-actions">
+              <button class="btn-ghost" id="rescan">Re-scan</button>
+              <div class="menu">
+                <button class="btn-ghost" id="export-btn">Export ▾</button>
+                <div class="menu-items" id="export-menu" hidden>
+                  <a id="dl-md" download>Report (Markdown)</a>
+                  <a id="dl-sarif" download>SARIF (for GitHub, GitLab)</a>
+                  <a id="dl-json" download>Raw JSON</a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="diff" id="diff" hidden></div>
+
+          <div class="filters" id="filters"></div>
+
+          <div class="split">
+            <ul class="finding-list" id="finding-list"></ul>
+            <div class="detail" id="detail">
+              <div class="detail-empty">Select a finding to see the detail.</div>
+            </div>
+          </div>
+
+          <div class="card coverage" id="coverage"></div>
+        </div>
+      </section>
+
+      <!-- ================= CHECKS ================= -->
+      <section class="view" id="view-checks">
+        <div class="card">
+          <h2>Every check Guardian Unit runs</h2>
+          <p class="lede">
+            All of these run on this machine with no model and no network. The rule
+            catalogue is open — nothing is hidden behind a paid tier.
+          </p>
+          <div id="checks-body" class="checks-body"></div>
+        </div>
+      </section>
+
+      <!-- ================= AGENTS ================= -->
+      <section class="view" id="view-agents">
+        <div class="card">
+          <h2>Security agents</h2>
+          <p class="lede">
+            Agents are optional. They read the findings the scanners produced and tell you
+            whether each one is real in your specific code. They never change a finding's
+            severity and they cannot remove one.
+          </p>
+          <div class="provider" id="provider-box"></div>
+          <div id="agents-body" class="agent-grid"></div>
+        </div>
+      </section>
+
+      <!-- ================= HISTORY ================= -->
+      <section class="view" id="view-history">
+        <div class="card">
+          <h2>Previous scans</h2>
+          <p class="lede">Stored on this machine only, in ~/.guardian-unit/guardian-unit.db.</p>
+          <div id="history-body"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Folder browser -->
+    <div class="modal" id="browser" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <strong>Choose a folder</strong>
+          <button class="btn-ghost" id="browser-close">Close</button>
+        </div>
+        <div class="crumbs" id="browser-path"></div>
+        <ul class="dir-list" id="browser-list"></ul>
+        <div class="modal-foot">
+          <button class="btn-primary" id="browser-pick">Use this folder</button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <span
+        >Guardian Unit runs entirely on this machine. No telemetry, no account, no code upload.</span
+      >
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

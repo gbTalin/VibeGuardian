@@ -1,0 +1,34 @@
+{
+  "name": "guardian-unit-penetration-testing-agent",
+  "version": "0.1.0",
+  "description": "Local-first security platform. Runs a roster of specialized security agents inside your own perimeter. Your code never leaves the building.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "guardian-unit": "./bin/guardian-unit.mjs"
+  },
+  "scripts": {
+    "start": "node bin/guardian-unit.mjs ui",
+    "scan": "node bin/guardian-unit.mjs scan",
+    "test": "node --test 'test/*.test.ts'",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0"
+  },
+  "keywords": [
+    "security",
+    "appsec",
+    "sast",
+    "secrets",
+    "local-first",
+    "air-gapped",
+    "ai-security",
+    "supply-chain"
+  ]
+}

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request_target:
+    branches: [main]
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: tj-actions/changed-files@v41
+
+      - name: Greet the contributor
+        run: echo "Thanks for ${{ github.event.pull_request.title }}"
+
+      - name: Install tooling
+        run: curl -sSL https://get.example.dev/install.sh | bash
+
+      - name: Deploy
+        env:
+          DEPLOY_TOKEN: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789
+        run: ./deploy.sh

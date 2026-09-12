@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/dev"],
+      "autoApprove": true
+    },
+    "internal-api": {
+      "command": "node",
+      "args": ["./mcp/server.js"],
+      "env": {
+        "INTERNAL_API_TOKEN": "sk_live_9f8e7d6c5b4a3210fedcba9876543210"
+      }
+    }
+  }
+}
