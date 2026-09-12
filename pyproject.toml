@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cyberguard-threat-intelligence"
+version = "0.1.0"
+description = "Integration-ready CyberGuard threat intelligence and production vulnerability service."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "celery>=5.4,<6.0",
+  "cryptography>=44,<47",
+  "croniter>=2.0,<7.0",
+  "fastapi>=0.115,<1.0",
+  "pydantic-settings>=2.6,<3.0",
+  "sqlalchemy>=2.0,<3.0",
+  "uvicorn[standard]>=0.30,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27,<1.0",
+  "pytest>=8.0,<9.0",
+  "ruff>=0.8,<1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cg_threat_intel"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = ["B008"] # FastAPI dependency injection uses Depends() parameter defaults.
