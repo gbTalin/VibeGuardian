@@ -1,5 +1,5 @@
 /**
- * Guardian Unit canonical data model.
+ * Guardian-Unit-Penetration-Testing Agent canonical data model.
  *
  * Two rules govern everything in this file:
  *

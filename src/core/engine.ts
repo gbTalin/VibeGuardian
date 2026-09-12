@@ -28,7 +28,7 @@ export interface EngineOptions {
 /**
  * The always-visible limitations statement.
  *
- * This is a product decision, not boilerplate. Every report Guardian Unit produces
+ * This is a product decision, not boilerplate. Every report Guardian-Unit-Penetration-Testing Agent produces
  * carries it. Static analysis of code at rest cannot see runtime behaviour,
  * cannot test a live system, and cannot stop a phishing email. Saying so
  * plainly is what makes the findings we DO report credible.

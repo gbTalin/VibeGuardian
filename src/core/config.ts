@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 /**
  * Configuration and the model-provider record.
  *
- * Design constraint that shapes this whole file: Guardian Unit must be fully useful
+ * Design constraint that shapes this whole file: Guardian-Unit-Penetration-Testing Agent must be fully useful
  * with NO configuration and NO model. Everything here is optional. The
  * deterministic scanners never read this file.
  *

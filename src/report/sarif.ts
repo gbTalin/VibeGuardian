@@ -1,5 +1,6 @@
 import type { ScanResult, Severity } from "../core/types.ts";
 import { VERSION } from "../version.ts";
+import { redactForOutput } from "../core/redact.ts";
 
 /**
  * SARIF 2.1.0 output.
@@ -29,6 +30,7 @@ const SCORE: Record<Severity, string> = {
 };
 
 export function toSarif(result: ScanResult): string {
+  result = redactForOutput(result);
   const rulesById = new Map<string, ReturnType<typeof ruleDescriptor>>();
 
   function ruleDescriptor(ruleId: string) {
@@ -82,7 +84,7 @@ export function toSarif(result: ScanResult): string {
       {
         tool: {
           driver: {
-            name: "Guardian Unit",
+            name: "Guardian-Unit-Penetration-Testing Agent",
             version: VERSION,
             informationUri: "https://github.com/msitarzewski/agency-agents",
             semanticVersion: VERSION,

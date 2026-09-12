@@ -1,10 +1,17 @@
 import type { ProviderConfig } from "../core/config.ts";
 import { resolveApiKey } from "../core/config.ts";
 
+function providerHttpError(provider: string, status: number): Error {
+  // Never include a provider response body. Those bodies can contain request
+  // echoes, credentials, or arbitrary third-party text that later becomes a
+  // scan warning, a stored record, or an exported report.
+  return new Error(`${provider} returned HTTP ${status}.`);
+}
+
 /**
  * Model provider abstraction.
  *
- * Guardian Unit never ships a model and never proxies inference through a service we
+ * Guardian-Unit-Penetration-Testing Agent never ships a model and never proxies inference through a service we
  * operate. The organization supplies the brain: a local model over Ollama or
  * any OpenAI-compatible endpoint, or their own key with a hosted provider. That
  * is what makes "your code never leaves the building" a property of the
@@ -86,7 +93,7 @@ class OllamaProvider implements Provider {
       }),
       signal: req.signal,
     });
-    if (!res.ok) throw new Error(`Ollama returned ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw providerHttpError("Ollama", res.status);
     const data = (await res.json()) as { message?: { content?: string } };
     return data.message?.content ?? "";
   }
@@ -125,7 +132,7 @@ class AnthropicProvider implements Provider {
       }),
       signal: req.signal,
     });
-    if (!res.ok) throw new Error(`Anthropic API returned ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw providerHttpError("Anthropic API", res.status);
     const data = (await res.json()) as { content?: { type: string; text?: string }[] };
     return (data.content ?? []).filter((c) => c.type === "text").map((c) => c.text ?? "").join("");
   }
@@ -177,7 +184,7 @@ class OpenAICompatibleProvider implements Provider {
       }),
       signal: req.signal,
     });
-    if (!res.ok) throw new Error(`Provider returned ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw providerHttpError("Provider", res.status);
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return data.choices?.[0]?.message?.content ?? "";
   }

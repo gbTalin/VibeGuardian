@@ -14,7 +14,7 @@ import { safeSnippet } from "../core/redact.ts";
  * Application code vulnerabilities.
  *
  * Every rule in this file is written from scratch and licensed with the rest of
- * Guardian Unit. That is a deliberate legal position, not an accident: Semgrep's
+ * Guardian-Unit-Penetration-Testing Agent. That is a deliberate legal position, not an accident: Semgrep's
  * community rules are published under a licence that permits internal use only
  * and forbids redistribution or offering them as a service, which makes them
  * unusable in a distributed commercial product. Vendoring them would be a

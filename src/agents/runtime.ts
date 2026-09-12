@@ -15,7 +15,7 @@ import type { Provider } from "./providers.ts";
  * say whether the match matters here, and to explain it in terms of this
  * specific code.
  *
- * That boundary is a security decision, not a limitation we regret. Guardian Unit's
+ * That boundary is a security decision, not a limitation we regret. Guardian-Unit-Penetration-Testing Agent's
  * agents read attacker-controlled text for a living -- every repository it
  * scans may contain instructions written specifically to hijack a code-reading
  * model. The defenses below assume that has already happened.
@@ -210,7 +210,7 @@ async function reviewOne(
         ...finding,
         // The agent annotates. It never changes severity and never removes the
         // finding: a model that has been successfully injected must not be able
-        // to talk Guardian Unit out of reporting a real vulnerability.
+        // to talk Guardian-Unit-Penetration-Testing Agent out of reporting a real vulnerability.
         provenance: "hybrid",
         agentReview: {
           agent: agent.name,

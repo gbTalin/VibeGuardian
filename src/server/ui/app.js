@@ -1,4 +1,4 @@
-/* Guardian Unit dashboard client.
+/* Guardian-Unit-Penetration-Testing Agent dashboard client.
    No framework, no build step, no dependencies. The page is served from
    localhost under a strict CSP that forbids inline script and any external
    origin, which is easiest to honour by simply not needing either. */
@@ -54,7 +54,7 @@ async function boot() {
     document.body.innerHTML =
       '<div style="padding:3rem;text-align:center;font-family:sans-serif">' +
       "<h1>Missing access token</h1>" +
-      "<p>Open the full URL that Guardian Unit printed in your terminal.</p></div>";
+      "<p>Open the full URL that Guardian-Unit-Penetration-Testing Agent printed in your terminal.</p></div>";
     return;
   }
   try {
@@ -119,8 +119,6 @@ async function runScan() {
   const body = JSON.stringify({
     path,
     agents: $("opt-agents").checked,
-    network: $("opt-network").checked,
-    domains: $("domains").value.trim(),
   });
 
   // The scan streams progress over SSE. fetch + a reader is used rather than
@@ -477,7 +475,7 @@ function renderAgents() {
             `<div class="d">${esc(a.description)}</div></div>`
         )
         .join("")
-    : `<p class="hint">No agent definitions found. Guardian Unit looks in <code>~/.guardian-unit/agents</code> and in the <code>security/</code> folder of an agency-agents checkout.</p>`;
+    : `<p class="hint">No agent definitions found. Guardian-Unit-Penetration-Testing Agent looks in <code>~/.guardian-unit/agents</code> and in the <code>security/</code> folder of an agency-agents checkout.</p>`;
 
   $("provider-box").innerHTML =
     `<strong>Model</strong>` +
@@ -497,7 +495,7 @@ function renderAgents() {
     `<input type="text" id="prov-model" placeholder="model name" value="${esc(s.provider.model || "")}" style="width:240px" />` +
     `<button class="btn-primary" id="prov-save">Save</button>` +
     `</div>` +
-    `<p class="hint">Guardian Unit never stores an API key. Keys are read from the environment at the moment of the call.</p>`;
+    `<p class="hint">Guardian-Unit-Penetration-Testing Agent never stores an API key. Keys are read from the environment at the moment of the call.</p>`;
 
   $("prov-save").addEventListener("click", async () => {
     try {

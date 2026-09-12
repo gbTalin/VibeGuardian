@@ -1,4 +1,4 @@
-# Guardian Unit's own rule definitions contain, by necessity, literal examples of
+# Guardian-Unit-Penetration-Testing Agent's own rule definitions contain, by necessity, literal examples of
 # every pattern they detect. Scanning them reports the detector as the defect.
 # Every security scanner needs an exclusion like this one; ours is checked in
 # so you can see exactly what we exempt and why.
@@ -6,7 +6,7 @@ src/scanners
 src/data
 
 # The redaction tests must contain real-shaped credentials, because that is
-# what they assert never reaches an output. Guardian Unit correctly finds them and
+# what they assert never reaches an output. Guardian-Unit-Penetration-Testing Agent correctly finds them and
 # correctly downgrades them to test-context severity; excluded here so our own
 # scan is clean rather than because the detection is wrong.
 test

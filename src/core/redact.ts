@@ -69,6 +69,27 @@ export function safeSnippet(text: string, maxLen = 240): string {
   return redact(trimmed);
 }
 
+/**
+ * Apply redaction at an output boundary, including nested warning, triage, and
+ * report fields. Scanner-level redaction is necessary but not sufficient:
+ * provider and storage errors can be introduced after a scanner has finished.
+ */
+export function redactForOutput<T>(value: T): T {
+  if (typeof value === "string") return redact(value) as T;
+  if (Array.isArray(value)) return value.map((entry) => redactForOutput(entry)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, redactForOutput(entry)]),
+    ) as T;
+  }
+  return value;
+}
+
+/** Serialize a result only after recursively redacting every user-visible field. */
+export function safeJson(value: unknown, space?: number): string {
+  return JSON.stringify(redactForOutput(value), null, space);
+}
+
 /** Reduce an absolute path to the scan-relative portion. Absolute paths leak usernames into reports. */
 export function relativize(absPath: string, root: string): string {
   const normRoot = root.endsWith("/") ? root : `${root}/`;

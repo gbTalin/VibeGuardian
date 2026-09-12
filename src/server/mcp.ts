@@ -7,7 +7,7 @@ import { VERSION } from "../version.ts";
 import type { Finding } from "../core/types.ts";
 
 /**
- * Guardian Unit as an MCP server.
+ * Guardian-Unit-Penetration-Testing Agent as an MCP server.
  *
  * This exists because of where the vulnerabilities come from. The assistant
  * that wrote the code is the thing best placed to check it, at the moment it
@@ -35,7 +35,7 @@ const TOOLS = [
     name: "security_scan",
     title: "Scan code for security problems",
     description:
-      "Run Guardian Unit's local security scanners over a folder and return the findings, worst first. " +
+      "Run Guardian-Unit-Penetration-Testing Agent's local security scanners over a folder and return the findings, worst first. " +
       "Detects leaked credentials, the access-control mistakes AI assistants make by default " +
       "(row-level security disabled, privileged keys in browser code, permission checks on " +
       "client-editable fields), prompt-injection paths, risky MCP server configuration, " +
@@ -68,7 +68,7 @@ const TOOLS = [
     name: "security_rules",
     title: "List available security checks",
     description:
-      "List every rule Guardian Unit can apply, with its severity, the threat it addresses, and its " +
+      "List every rule Guardian-Unit-Penetration-Testing Agent can apply, with its severity, the threat it addresses, and its " +
       "CWE and OWASP mappings. Use this to explain what was and was not checked.",
     inputSchema: { type: "object", properties: {} },
   },
@@ -146,7 +146,7 @@ export async function startMcpServer(): Promise<void> {
 
   // Diagnostics go to stderr. Anything on stdout that is not a JSON-RPC
   // message corrupts the transport.
-  process.stderr.write(`Guardian Unit MCP server ${VERSION} ready (${engine.ruleCount()} checks)\n`);
+  process.stderr.write(`Guardian-Unit-Penetration-Testing Agent MCP server ${VERSION} ready (${engine.ruleCount()} checks)\n`);
 
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -168,7 +168,7 @@ export async function startMcpServer(): Promise<void> {
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: "guardian-unit", version: VERSION },
             instructions:
-              "Guardian Unit scans code for security problems entirely on this machine. " +
+              "Guardian-Unit-Penetration-Testing Agent scans code for security problems entirely on this machine. " +
               "Call security_scan after writing or changing code and before reporting the work " +
               "as complete. Always pass on its coverage limitations to the user; never describe " +
               "code as secure because a scan found nothing.",

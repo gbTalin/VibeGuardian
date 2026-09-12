@@ -10,6 +10,7 @@ import { loadAgents } from "./agents/loader.ts";
 import { makeProvider, tierOf } from "./agents/providers.ts";
 import { reviewFindings } from "./agents/runtime.ts";
 import { countBySeverity, rank } from "./core/finding.ts";
+import { safeJson } from "./core/redact.ts";
 import { PRODUCT, TAGLINE, VERSION } from "./version.ts";
 import type { Severity } from "./core/types.ts";
 
@@ -59,14 +60,13 @@ function help(): string {
     `    guardian-unit setup                Choose a model for the agent review layer`,
     `    guardian-unit doctor               Check that everything is working`,
     `    guardian-unit agents               List the security agents available`,
-    `    guardian-unit rules                List every check Guardian Unit can run`,
+    `    guardian-unit rules                List every check Guardian-Unit-Penetration-Testing Agent can run`,
     `    guardian-unit mcp                  Run as an MCP server for AI coding tools`,
     "",
     `  ${c("1", "Scan options")}`,
     "",
     `    --agents                     Also run agent review over the findings`,
     `    --only secrets,code          Run only these checks`,
-    `    --skip surface               Skip these checks`,
     `    --sarif out.sarif            Write SARIF for code-scanning platforms`,
     `    --markdown report.md         Write a full human-readable report`,
     `    --json                       Print raw JSON to stdout`,
@@ -75,7 +75,7 @@ function help(): string {
     "",
     `  ${c("1", "Privacy")}`,
     "",
-    `    Guardian Unit runs entirely on this machine with no telemetry and no`,
+    `    Guardian-Unit-Penetration-Testing Agent runs entirely on this machine with no telemetry and no`,
     `    network access in its static scanner.`,
     "",
   ].join("\n");
@@ -179,7 +179,7 @@ async function cmdScan(args: Args): Promise<number> {
 
   // Output.
   if (args.flags.json) {
-    stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    stdout.write(`${safeJson(result, 2)}\n`);
   } else {
     stdout.write(toTerminal(result, useColor));
   }
@@ -221,7 +221,7 @@ async function cmdAgents(): Promise<number> {
   if (agents.length === 0) {
     process.stdout.write(
       `  ${c("33", "No agent definitions found.")}\n\n` +
-        `  Guardian Unit looks for markdown agent files in:\n` +
+        `  Guardian-Unit-Penetration-Testing Agent looks for markdown agent files in:\n` +
         `    ~/.guardian-unit/agents\n` +
         `    the security/ directory of an agency-agents checkout\n\n` +
         `  Set GUARDIAN_UNIT_AGENTS_DIR to point somewhere else.\n\n`,
@@ -304,7 +304,7 @@ async function cmdSetup(args: Args): Promise<number> {
     process.stdout.write(banner());
     process.stdout.write(
       [
-        `  ${c("1", "Guardian Unit works fully without a model.")} The agent review layer is optional.`,
+        `  ${c("1", "Guardian-Unit-Penetration-Testing Agent works fully without a model.")} The agent review layer is optional.`,
         "",
         `  ${c("1", "To stay completely offline")} — recommended, and required if your code cannot leave the network:`,
         "",
@@ -323,7 +323,7 @@ async function cmdSetup(args: Args): Promise<number> {
         "",
         `    ${c("36", "guardian-unit setup none")}`,
         "",
-        `  ${c("90", "Guardian Unit never stores an API key. It reads them from the environment at call time.")}`,
+        `  ${c("90", "Guardian-Unit-Penetration-Testing Agent never stores an API key. It reads them from the environment at call time.")}`,
         "",
         `  Current: ${c("90", privacyPosture(cfg))}`,
         "",
@@ -411,7 +411,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`\n  ${c("1;31", "Guardian Unit hit an error:")} ${err instanceof Error ? err.message : String(err)}\n\n`);
+  process.stderr.write(`\n  ${c("1;31", "Guardian-Unit-Penetration-Testing Agent hit an error:")} ${err instanceof Error ? err.message : String(err)}\n\n`);
   if (process.env.GUARDIAN_UNIT_DEBUG) console.error(err);
   process.exitCode = 2;
 });

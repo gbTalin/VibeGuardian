@@ -1,5 +1,6 @@
 import type { Finding, ScanResult, Severity } from "../core/types.ts";
 import { countBySeverity, postureLabel } from "../core/finding.ts";
+import { redactForOutput } from "../core/redact.ts";
 
 /**
  * Human-readable report.
@@ -76,6 +77,7 @@ function findingSection(f: Finding, index: number): string {
 }
 
 export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): string {
+  result = redactForOutput(result);
   const counts = countBySeverity(result.findings);
   const posture = postureLabel(counts);
   const open = result.findings.filter((f) => f.status === "open");
@@ -85,7 +87,7 @@ export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): s
     "",
     `**${posture.label}.** ${posture.detail}`,
     "",
-    `Scanned ${result.coverage.filesScanned.toLocaleString()} files in ${(result.durationMs / 1000).toFixed(1)}s on ${new Date(result.startedAt).toLocaleString()}. Guardian Unit ${result.guardianUnitVersion}.`,
+    `Scanned ${result.coverage.filesScanned.toLocaleString()} files in ${(result.durationMs / 1000).toFixed(1)}s on ${new Date(result.startedAt).toLocaleString()}. Guardian-Unit-Penetration-Testing Agent ${result.guardianUnitVersion}.`,
     "",
     "## Summary",
     "",
@@ -165,7 +167,7 @@ export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): s
   out.push(
     "---",
     "",
-    "_Generated locally by Guardian Unit. No code, findings, or metadata from this scan left this machine._",
+    "_Generated locally by Guardian-Unit-Penetration-Testing Agent. No code, findings, or metadata from this scan left this machine._",
     "",
   );
 
@@ -174,6 +176,7 @@ export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): s
 
 /** Compact terminal summary. */
 export function toTerminal(result: ScanResult, useColor: boolean): string {
+  result = redactForOutput(result);
   const c = (code: string, s: string) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
   const counts = countBySeverity(result.findings);
   const posture = postureLabel(counts);

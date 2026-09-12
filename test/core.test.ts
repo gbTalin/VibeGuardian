@@ -1,10 +1,26 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { fingerprint, dedupe, rank, postureLabel, countBySeverity } from "../src/core/finding.ts";
-import { redact, redactValue, safeSnippet } from "../src/core/redact.ts";
+import { redact, redactForOutput, redactValue, safeJson, safeSnippet } from "../src/core/redact.ts";
 import { editDistance } from "../src/scanners/_shared.ts";
 import { inRegexLiteral, inComment, isClientReachable } from "../src/core/text.ts";
+import { buildEngine } from "../src/scanners/index.ts";
+import { configDir } from "../src/core/config.ts";
+import { Store } from "../src/core/store.ts";
+import { toMarkdown } from "../src/report/markdown.ts";
+import { toSarif } from "../src/report/sarif.ts";
+import { makeProvider } from "../src/agents/providers.ts";
+import { PRODUCT } from "../src/version.ts";
 import type { Finding } from "../src/core/types.ts";
+
+const execFile = promisify(execFileCallback);
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function mkFinding(over: Partial<Finding> = {}): Finding {
   return {
@@ -100,6 +116,13 @@ describe("redaction", () => {
     const out = safeSnippet(long, 80);
     assert.ok(out.length <= 84);
   });
+
+  test("redacts nested output fields at the serialization boundary", () => {
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const output = safeJson({ warning: `provider echoed ${secret}`, nested: { note: secret } }, 2);
+    assert.ok(!output.includes(secret));
+    assert.ok(!JSON.stringify(redactForOutput({ secret })).includes(secret));
+  });
 });
 
 describe("finding handling", () => {
@@ -161,5 +184,110 @@ describe("text analysis", () => {
     assert.equal(isClientReachable("src/lib/x.ts", '"use client";\nexport const a = 1;'), true);
     assert.equal(isClientReachable("src/components/Button.tsx"), true);
     assert.equal(isClientReachable("src/lib/db.ts"), false);
+  });
+});
+
+describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => {
+  test("ships only static scanners and no legacy live surface module", async () => {
+    assert.deepEqual(
+      buildEngine().list().map((scanner) => scanner.name),
+      ["secrets", "ai-code", "ai-agents", "dependencies", "ci", "iac", "code"],
+    );
+    await assert.rejects(access(join(ROOT, "src/scanners/surface.ts"), constants.F_OK));
+  });
+
+  test("uses Guardian-Unit-Penetration-Testing Agent home and ignore paths", async () => {
+    const previous = process.env.GUARDIAN_UNIT_HOME;
+    process.env.GUARDIAN_UNIT_HOME = "/tmp/guardian-unit-test-home";
+    try {
+      assert.equal(configDir(), "/tmp/guardian-unit-test-home");
+      await access(join(ROOT, ".guardianignore"), constants.F_OK);
+      const source = await readFile(join(ROOT, "src/core/walk.ts"), "utf8");
+      assert.match(source, /\.guardianignore/);
+      assert.doesNotMatch(source, /\.rampartignore/);
+    } finally {
+      if (previous === undefined) delete process.env.GUARDIAN_UNIT_HOME;
+      else process.env.GUARDIAN_UNIT_HOME = previous;
+    }
+  });
+
+  test("CLI fixture stays offline, redacted, and repository-relative", async () => {
+    const home = await mkdtemp("/tmp/guardian-unit-cli-");
+    try {
+      const { stdout } = await execFile(process.execPath, ["bin/guardian-unit.mjs", "scan", "examples/vulnerable-app", "--json"], {
+        cwd: ROOT,
+        env: { ...process.env, GUARDIAN_UNIT_HOME: home, GUARDIAN_UNIT_DOMAINS: "should-not-be-used.example" },
+      });
+      const result = JSON.parse(stdout) as import("../src/core/types.ts").ScanResult;
+      const serialised = JSON.stringify(result);
+      assert.ok(result.findings.length > 0);
+      assert.ok(result.coverage.scannersRun.every((name) => name !== "surface"));
+      assert.ok(result.coverage.limitations.some((line) => /Network checks were disabled/.test(line)));
+      assert.ok(result.findings.every((f) => !f.location?.file.startsWith("/")));
+      assert.ok(!serialised.includes("AKIAIOSFODNN7EXAMPLE"));
+      assert.ok(!serialised.includes("hunter2"));
+
+      const { stdout: help } = await execFile(process.execPath, ["bin/guardian-unit.mjs", "--help"], { cwd: ROOT });
+      assert.doesNotMatch(help, /--(?:network|domain|skip surface)/);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("provider response bodies and triage secrets never reach stored or exported output", async () => {
+    const bodySentinel = "PROVIDER_RESPONSE_BODY_SENTINEL";
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const originalFetch = globalThis.fetch;
+    let providerWarning = "";
+    globalThis.fetch = (async () => new Response(`${bodySentinel} ${secret}`, { status: 502 })) as typeof fetch;
+    try {
+      const provider = makeProvider({ kind: "custom", model: "test", baseUrl: "http://127.0.0.1:9" });
+      await assert.rejects(provider.complete({ system: "s", user: "u" }), (err: Error) => {
+        assert.equal(err.message, "Provider returned HTTP 502.");
+        assert.ok(!err.message.includes(bodySentinel));
+        assert.ok(!err.message.includes(secret));
+        providerWarning = err.message;
+        return true;
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const dir = await mkdtemp("/tmp/guardian-unit-store-");
+    const store = new Store(join(dir, "history.db"));
+    try {
+      store.setTriage("x", "/repo", "triaged", `keep private: ${secret}`);
+      const triaged = store.applyTriage([mkFinding()], "/repo");
+      const json = safeJson({ ...triaged[0], warnings: [providerWarning] }, 2);
+      const markdown = toMarkdown({
+        scanId: "00000000-0000-4000-8000-000000000000",
+        target: triaged[0].target,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1000,
+        findings: triaged,
+        warnings: [providerWarning],
+        coverage: { filesScanned: 1, filesSkipped: 0, skipReasons: {}, scannersRun: [], scannersSkipped: [], agentAnalysisRan: false, limitations: [] },
+        guardianUnitVersion: "0.1.0",
+      });
+      const sarif = toSarif({
+        scanId: "00000000-0000-4000-8000-000000000000",
+        target: triaged[0].target,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1000,
+        findings: triaged,
+        warnings: [providerWarning],
+        coverage: { filesScanned: 1, filesSkipped: 0, skipReasons: {}, scannersRun: [], scannersSkipped: [], agentAnalysisRan: false, limitations: [] },
+        guardianUnitVersion: "0.1.0",
+      });
+      for (const output of [json, markdown, sarif]) assert.ok(!output.includes(secret));
+      assert.ok(!sarif.includes(bodySentinel));
+      assert.equal(JSON.parse(sarif).runs[0].tool.driver.name, "Guardian-Unit-Penetration-Testing Agent");
+      assert.equal(PRODUCT, "Guardian-Unit-Penetration-Testing Agent");
+    } finally {
+      store.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

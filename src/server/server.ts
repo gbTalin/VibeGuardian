@@ -14,6 +14,7 @@ import { loadAgents } from "../agents/loader.ts";
 import { makeProvider, tierOf } from "../agents/providers.ts";
 import { reviewFindings } from "../agents/runtime.ts";
 import { rank } from "../core/finding.ts";
+import { redact, safeJson } from "../core/redact.ts";
 import { PRODUCT, VERSION } from "../version.ts";
 import type { FindingStatus, ScanResult } from "../core/types.ts";
 
@@ -21,7 +22,7 @@ import type { FindingStatus, ScanResult } from "../core/types.ts";
  * The local dashboard.
  *
  * Binds to loopback only and requires a token that is printed to the terminal
- * and embedded in the URL Guardian Unit opens. Both matter: a security tool that
+ * and embedded in the URL Guardian-Unit-Penetration-Testing Agent opens. Both matter: a security tool that
  * exposes an unauthenticated "scan any path on this machine and show me the
  * results" endpoint on 0.0.0.0 would be a serious vulnerability in its own
  * right, and every other program on the machine can reach 127.0.0.1.
@@ -44,7 +45,7 @@ interface ServerOptions {
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
+  const payload = safeJson(body);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(payload),
@@ -97,7 +98,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
     // controls at 127.0.0.1, but it cannot forge the Host header.
     const host = (req.headers.host ?? "").split(":")[0];
     if (host && !["localhost", "127.0.0.1", "[::1]", "::1"].includes(host)) {
-      res.writeHead(403).end("Guardian Unit only accepts requests addressed to localhost.");
+      res.writeHead(403).end("Guardian-Unit-Penetration-Testing Agent only accepts requests addressed to localhost.");
       return;
     }
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -112,7 +113,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
     if (path.startsWith("/api/")) {
       const supplied = url.searchParams.get("token") ?? (req.headers["x-guardian-unit-token"] as string) ?? "";
       if (!constantTimeEqual(supplied, token)) {
-        json(res, 401, { error: "Invalid or missing token. Reopen the URL Guardian Unit printed in your terminal." });
+        json(res, 401, { error: "Invalid or missing token. Reopen the URL Guardian-Unit-Penetration-Testing Agent printed in your terminal." });
         return;
       }
     }
@@ -158,7 +159,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
           defaultRoot: opts.root,
           home: homedir(),
           privacy: privacyPosture(cfg),
-          allowNetwork: cfg.allowNetwork,
+          allowNetwork: false,
           provider: {
             kind: cfg.provider.kind,
             model: cfg.provider.model ?? null,
@@ -232,19 +233,17 @@ export async function startServer(opts: ServerOptions): Promise<void> {
           const st = await stat(target);
           if (!st.isDirectory()) throw new Error("not a directory");
         } catch {
-          json(res, 400, { error: `${target} is not a folder Guardian Unit can read.` });
+          json(res, 400, { error: `${target} is not a folder Guardian-Unit-Penetration-Testing Agent can read.` });
           return;
         }
 
         const cfg = await loadConfig();
         const withAgents = body.agents === true;
-        const withNetwork = body.network === true;
-        const domains = typeof body.domains === "string" ? body.domains.trim() : "";
-        if (domains) process.env.GUARDIAN_UNIT_DOMAINS = domains;
-
         const runtimeCfg: GuardianUnitConfig = {
           ...cfg,
-          allowNetwork: withNetwork || Boolean(domains),
+          // Static scans are offline. The separately authorized probe is the
+          // only future route that may make bounded live requests.
+          allowNetwork: false,
         };
 
         res.writeHead(200, {
@@ -254,7 +253,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
           "x-accel-buffering": "no",
         });
         const send = (event: string, data: unknown) => {
-          res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+          res.write(`event: ${event}\ndata: ${safeJson(data)}\n\n`);
         };
 
         const controller = new AbortController();
@@ -318,7 +317,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
               : null,
           });
         } catch (err) {
-          send("error", { message: err instanceof Error ? err.message : String(err) });
+          send("error", { message: redact(err instanceof Error ? err.message : String(err)) });
         } finally {
           running.delete(runId);
           res.end();
@@ -332,7 +331,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
         const findingId = String(body.findingId ?? "");
         const targetId = String(body.targetId ?? "");
         const status = String(body.status ?? "open") as FindingStatus;
-        const note = body.note ? String(body.note).slice(0, 2000) : undefined;
+        const note = body.note ? redact(String(body.note).slice(0, 2000)) : undefined;
         const valid: FindingStatus[] = ["open", "triaged", "fixed", "suppressed", "false-positive"];
         if (!findingId || !targetId || !valid.includes(status)) {
           json(res, 400, { error: "findingId, targetId and a valid status are required." });
@@ -362,7 +361,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
         const bodies: Record<string, [string, string]> = {
           md: [toMarkdown(result), "text/markdown; charset=utf-8"],
           sarif: [toSarif(result), "application/json; charset=utf-8"],
-          json: [JSON.stringify(result, null, 2), "application/json; charset=utf-8"],
+          json: [safeJson(result, 2), "application/json; charset=utf-8"],
         };
         const [content, type] = bodies[format];
         res.writeHead(200, {

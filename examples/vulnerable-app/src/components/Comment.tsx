@@ -1,6 +1,6 @@
 "use client";
 
-// Publishable keys are fine in client code. Guardian Unit should say so, not panic.
+// Publishable keys are fine in client code. Guardian-Unit-Penetration-Testing Agent should say so, not panic.
 const STRIPE_PK = "pk_live_51H8xKzExampleKeyForTestingOnly000";
 
 export function Comment({ html }: { html: string }) {

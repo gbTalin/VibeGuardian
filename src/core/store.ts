@@ -1,13 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { configDir } from "./config.ts";
+import { redact, redactForOutput } from "./redact.ts";
 import type { Finding, FindingStatus, ScanResult } from "./types.ts";
 
 /**
  * Local scan history and triage state.
  *
- * Uses node:sqlite -- built into Node, so Guardian Unit ships with zero native
+ * Uses node:sqlite -- built into Node, so Guardian-Unit-Penetration-Testing Agent ships with zero native
  * modules and zero npm dependencies. For a security tool that is not a
  * stylistic preference: every dependency is a supply-chain edge, and a scanner
  * with 400 transitive packages is asking its customers to trust 400 strangers.
@@ -33,9 +34,9 @@ export class Store {
   private db: DatabaseSync;
 
   constructor(dbPath?: string) {
-    const dir = configDir();
-    mkdirSync(dir, { recursive: true });
-    this.db = new DatabaseSync(dbPath ?? join(dir, "guardian-unit.db"));
+    const path = dbPath ?? join(configDir(), "guardian-unit.db");
+    mkdirSync(dirname(path), { recursive: true });
+    this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
@@ -100,8 +101,8 @@ export class Store {
         result.finishedAt,
         result.durationMs,
         result.guardianUnitVersion,
-        JSON.stringify(result.coverage),
-        JSON.stringify(result.warnings),
+        JSON.stringify(redactForOutput(result.coverage)),
+        JSON.stringify(redactForOutput(result.warnings)),
       );
       for (const f of result.findings) {
         insertFinding.run(
@@ -110,7 +111,7 @@ export class Store {
           f.ruleId,
           f.severity,
           f.location?.file ?? null,
-          JSON.stringify(f),
+          JSON.stringify(redactForOutput(f)),
         );
       }
       this.db.exec("COMMIT");
@@ -129,7 +130,7 @@ export class Store {
     return findings.map((f) => {
       const t = map.get(f.id);
       if (!t) return f;
-      return { ...f, status: t.status as FindingStatus, note: t.note ?? undefined };
+      return { ...f, status: t.status as FindingStatus, note: t.note ? redact(t.note) : undefined };
     });
   }
 
@@ -142,7 +143,7 @@ export class Store {
                                                note = excluded.note,
                                                updated_at = excluded.updated_at`,
       )
-      .run(findingId, targetId, status, note ?? null, new Date().toISOString());
+      .run(findingId, targetId, status, note ? redact(note) : null, new Date().toISOString());
   }
 
   recentScans(limit = 25): ScanSummaryRow[] {
@@ -180,7 +181,7 @@ export class Store {
     const rows = this.db
       .prepare("SELECT payload FROM findings WHERE scan_id = ?")
       .all(scanId) as { payload: string }[];
-    return rows.map((r) => JSON.parse(r.payload) as Finding);
+    return rows.map((r) => redactForOutput(JSON.parse(r.payload) as Finding));
   }
 
   /**

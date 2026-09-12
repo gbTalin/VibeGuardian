@@ -142,7 +142,7 @@ export function countBySeverity(findings: Finding[]): Record<Severity, number> {
 }
 
 /**
- * Guardian Unit never reports a single "security score" or "percent secure". A number
+ * Guardian-Unit-Penetration-Testing Agent never reports a single "security score" or "percent secure". A number
  * like that gets screenshotted into a board deck and read as a guarantee, and no
  * static scan can support that claim. What we report instead is a posture label
  * derived only from what was actually found, always shown next to the coverage

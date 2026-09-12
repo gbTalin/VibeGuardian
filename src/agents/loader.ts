@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Agent definitions are markdown files with YAML frontmatter, the same format
- * the agency-agents roster uses. Guardian Unit reads them rather than embedding
+ * the agency-agents roster uses. Guardian-Unit-Penetration-Testing Agent reads them rather than embedding
  * prompts in code, so an organization can add its own reviewer -- with its own
  * standards, its own language, its own threat priorities -- by dropping a file
  * into a directory. That is the extension point.
@@ -43,7 +43,7 @@ function parseFrontmatter(text: string): { meta: Record<string, string>; body: s
  * Search order for agent definitions:
  *   1. An explicit directory (config or --agents-dir)
  *   2. ~/.guardian-unit/agents
- *   3. The bundled copy shipped with Guardian Unit
+ *   3. The bundled copy shipped with Guardian-Unit-Penetration-Testing Agent
  *   4. The sibling security/ directory, when running from a checkout of the
  *      agency-agents repository
  */
