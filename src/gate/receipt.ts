@@ -6,10 +6,8 @@ import type { EvidenceDigest, ReceiptFinding, ReceiptInput, ReleaseReceipt } fro
 
 const UNSAFE_RECEIPT_KEY = /(secret|token|authorization|cookie|responsebody)/i;
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
 const ABSOLUTE_FILESYSTEM_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\|\/\/)/;
-const FILESYSTEM_PATH_IN_TEXT = /(^|[\s("'`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^\s"'`<>]*)/g;
+const FILESYSTEM_PATH_IN_TEXT = /(?:[A-Za-z]:[\\/]|\\\\|(?<!:)\/\/|(?<!\/)(?<!http:)(?<!https:)\/(?!\/))[^\s"'`<>\])},;]*/gi;
 const FILE_URI_IN_TEXT = /\bfile:\/\/\/?[^\s"'`<>]*/g;
 
 /** Reject dangerous fields before a value reaches the canonical receipt boundary. */
@@ -32,26 +30,25 @@ export function assertSafeReceiptValue(value: unknown, path = "receipt"): void {
   }
 }
 
-function sortJson(value: unknown): JsonValue {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return value;
+function serializeCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("Receipt values must be finite JSON numbers.");
-    return value;
+    return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return value.map(sortJson);
+  if (Array.isArray(value)) return `[${value.map(serializeCanonicalJson).join(",")}]`;
   if (!value || typeof value !== "object") throw new Error("Receipt values must be JSON-compatible.");
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([a], [b]) => compareCodeUnits(a, b))
-      .map(([key, entry]) => [key, sortJson(entry)]),
-  ) as JsonValue;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([a], [b]) => compareCodeUnits(a, b))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${serializeCanonicalJson(entry)}`)
+    .join(",")}}`;
 }
 
 /** Canonical JSON: recursively sorted object keys with no whitespace. */
 export function canonicalJson(value: unknown): string {
   assertSafeReceiptValue(value);
-  return JSON.stringify(sortJson(value));
+  return serializeCanonicalJson(value);
 }
 
 export function sha256(value: string): string {
@@ -76,7 +73,7 @@ function pathTail(value: string): string {
 function sanitizeText(value: string): string {
   return redact(value)
     .replace(FILE_URI_IN_TEXT, (uri) => `[path:${pathTail(uri.replace(/^file:\/\//, ""))}]`)
-    .replace(FILESYSTEM_PATH_IN_TEXT, (_match, prefix: string, path: string) => `${prefix}[path:${pathTail(path)}]`);
+    .replace(FILESYSTEM_PATH_IN_TEXT, (path) => `[path:${pathTail(path)}]`);
 }
 
 function relativePath(value: string | undefined): string | undefined {

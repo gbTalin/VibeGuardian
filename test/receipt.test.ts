@@ -62,6 +62,7 @@ describe("release receipt", () => {
 
   test("uses code-unit key ordering and recomputes the digest from the unsigned receipt", () => {
     assert.equal(canonicalJson({ z: 1, "Ä": 2, a: 3, A: 4, "!": 5 }), '{"!":5,"A":4,"a":3,"z":1,"Ä":2}');
+    assert.equal(canonicalJson({ "2": "two", "10": "ten", "1": "one" }), '{"1":"one","10":"ten","2":"two"}');
     const receipt = buildReceipt({
       generatedAt: "2026-09-12T18:00:02.000Z",
       scan: scan({}),
@@ -123,5 +124,29 @@ describe("release receipt", () => {
       const receipt = buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: raw, decision: decideRelease({ findings: [], requiredFailures: [] }) });
       assert.equal(receipt.findings[0].file, expected);
     }
+  });
+
+  test("scrubs absolute paths embedded after punctuation delimiters in receipt text", () => {
+    const raw = scan({
+      "path=/Users/alice/repo/file.ts": 1,
+      "path=C:\\Users\\alice\\repo\\file.ts": 1,
+      "path=\\\\server\\share\\repo\\file.ts": 1,
+    });
+    raw.warnings = [
+      "path=/Users/alice/repo/file.ts",
+      "path=C:\\Users\\alice\\repo\\file.ts",
+      "path=\\\\server\\share\\repo\\file.ts",
+      "details:[/Users/alice/repo/file.ts]",
+      "details:(C:\\Users\\alice\\repo\\file.ts)",
+    ];
+    raw.coverage.limitations = ["origin=\\\\server\\share\\repo\\file.ts"];
+    const receipt = buildReceipt({
+      generatedAt: "2026-09-12T18:00:02.000Z",
+      scan: raw,
+      decision: decideRelease({ findings: [], requiredFailures: [] }),
+    });
+    const output = canonicalJson(receipt);
+    assert.doesNotMatch(output, /\/Users\/alice|C:\\Users|\\\\server/);
+    assert.match(output, /\[path:repo\/file\.ts\]/);
   });
 });
