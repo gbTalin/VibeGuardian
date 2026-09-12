@@ -1,0 +1,14 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Bash|Shell|terminal|exec_command|run_command",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "GUARDIAN_UNIT_HOOK_HOST=codex node \"${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT}}/scripts/pre-deploy-gate.mjs\"",
+          "timeout": 100
+        }
+      ]
+    }
+  ]
+}

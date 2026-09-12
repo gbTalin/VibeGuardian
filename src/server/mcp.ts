@@ -4,6 +4,8 @@ import { buildEngine } from "../scanners/index.ts";
 import { loadConfig } from "../core/config.ts";
 import { countBySeverity } from "../core/finding.ts";
 import { redact, redactForOutput, safeJson } from "../core/redact.ts";
+import { runGate } from "../gate/run.ts";
+import type { ReleaseReceipt } from "../gate/types.ts";
 import { VERSION } from "../version.ts";
 import type { Finding } from "../core/types.ts";
 
@@ -73,9 +75,86 @@ const TOOLS = [
       "CWE and OWASP mappings. Use this to explain what was and was not checked.",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "guardian_security_scan",
+    title: "Guardian Unit security scan",
+    description:
+      "Run the local, network-off Guardian Unit source and configuration checks. " +
+      "This tool reads the selected repository and returns findings with honest coverage limits; it does not modify code or exploit anything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Absolute path to the repository. Defaults to the working directory.",
+        },
+        only: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional scanner names to run.",
+        },
+        min_severity: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low", "info"],
+          description: "Omit findings below this severity. Defaults to low.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "guardian_release_gate",
+    title: "Guardian Unit release gate",
+    description:
+      "Return PASS, WARN, HOLD, or BLOCK for a repository. Static checks are local. " +
+      "A live URL is probed only when both an exact target and an authorization-record path are supplied and validated by the shared gate.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Absolute path to the repository. Defaults to the working directory.",
+        },
+        target: {
+          type: "string",
+          description: "Optional exact authorized http(s) origin to probe.",
+        },
+        authorization_path: {
+          type: "string",
+          description: "Authorization record for target. Required whenever target is supplied.",
+        },
+        block_at_or_above: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low", "info"],
+          description: "Optional release threshold. Defaults to high.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "guardian_get_receipt",
+    title: "Get Guardian Unit release receipt",
+    description:
+      "Retrieve a redacted release receipt created by guardian_release_gate during this MCP session. " +
+      "This tool does not read arbitrary files or perform a new scan.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        receipt_id: {
+          type: "string",
+          description: "Receipt digest or scan id. Omit for the most recent receipt in this MCP session.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+type SecurityEngine = ReturnType<typeof buildEngine>;
+const receipts = new Map<string, ReleaseReceipt>();
+let latestReceiptId: string | null = null;
 
 /** Public JSON-RPC boundary, exported for deterministic protocol testing. */
 export function serializeMcpMessage(message: Record<string, unknown>): string {
@@ -145,6 +224,131 @@ function renderFindings(findings: Finding[], coverage: { filesScanned: number; l
   return out.join("\n");
 }
 
+/** Shared in-process scan adapter used by both the legacy and Guardian-named MCP tools. */
+export async function runMcpSecurityScan(
+  engine: SecurityEngine,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const target = resolve(String(args.path ?? process.cwd()));
+  const cfg = await loadConfig();
+  const only = Array.isArray(args.only) ? (args.only as string[]) : undefined;
+  const requestedSeverity = String(args.min_severity ?? "low");
+  const minSeverity = Object.hasOwn(SEV_RANK, requestedSeverity)
+    ? requestedSeverity as keyof typeof SEV_RANK
+    : "low";
+
+  const result = await engine.scan(target, {
+    // A general MCP scan never grants network permission.
+    config: { ...cfg, allowNetwork: false },
+    only,
+  });
+  const filtered = result.findings.filter(
+    (finding) => SEV_RANK[finding.severity] <= SEV_RANK[minSeverity] && finding.status === "open",
+  );
+
+  return {
+    content: [{ type: "text", text: renderFindings(filtered, result.coverage) }],
+    structuredContent: {
+      scanId: result.scanId,
+      target: result.target.id,
+      counts: countBySeverity(filtered),
+      findings: filtered.map((finding) => ({
+        id: finding.id,
+        ruleId: finding.ruleId,
+        severity: finding.severity,
+        confidence: finding.confidence,
+        title: finding.title,
+        file: finding.location?.file ?? null,
+        line: finding.location?.startLine ?? null,
+        remediation: finding.remediation.summary,
+        cwe: finding.mappings.cwe ?? [],
+      })),
+      coverage: result.coverage,
+      evidenceState: "COMPLETE",
+    },
+    isError: false,
+  };
+}
+
+/** Shared gate adapter. It calls the engine directly; no CLI subprocess is spawned. */
+export async function runMcpReleaseGate(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const root = resolve(String(args.path ?? process.cwd()));
+  const target = typeof args.target === "string" && args.target.trim() ? args.target.trim() : undefined;
+  const authorizationPath = typeof args.authorization_path === "string" && args.authorization_path.trim()
+    ? resolve(root, args.authorization_path.trim())
+    : undefined;
+  if (Boolean(target) !== Boolean(authorizationPath)) {
+    throw new Error("target and authorization_path must be supplied together");
+  }
+
+  const threshold = String(args.block_at_or_above ?? "");
+  const policy = Object.hasOwn(SEV_RANK, threshold)
+    ? { blockAtOrAbove: threshold as keyof typeof SEV_RANK }
+    : undefined;
+  // target/authorizationPath are consumed by the shared authorized-probe path.
+  // Keeping the object inferred allows older static-only builds to start while
+  // preserving fail-closed behavior when a target is requested.
+  const gateOptions = { root, policy, target, authorizationPath } as Parameters<typeof runGate>[0];
+  const gate = await runGate(gateOptions);
+  const receipt = redactForOutput(gate.receipt);
+  receipts.set(receipt.digest, receipt);
+  receipts.set(receipt.scan.id, receipt);
+  latestReceiptId = receipt.digest;
+
+  const mayDeploy = !gate.termination && (gate.decision.outcome === "PASS" || gate.decision.outcome === "WARN");
+  const probe = (gate as typeof gate & { probe?: { state?: string } }).probe;
+  const scannerFailed = receipt.scan.coverage.scannersSkipped.some((scanner) => scanner.reason.startsWith("error:"));
+  const evidence = {
+    sourceAndConfig: scannerFailed ? "UNPROVEN" : "COMPLETE",
+    liveProbe: target ? (probe?.state ?? (gate.termination === "REFUSED" ? "REFUSED" : "UNPROVEN")) : "UNPROVEN",
+    intelligence: receipt.intelligence.state,
+  };
+  const text = [
+    `Guardian Unit release decision: ${gate.termination ?? gate.decision.outcome}.`,
+    mayDeploy ? "Deployment may continue." : "Deployment must stop.",
+    ...gate.decision.reasons.map((reason) => `- ${reason}`),
+    `Receipt: ${receipt.digest}`,
+    `Evidence: source/config ${evidence.sourceAndConfig}; live probe ${evidence.liveProbe}; threat intelligence ${evidence.intelligence}.`,
+  ].join("\n");
+
+  return {
+    content: [{ type: "text", text }],
+    structuredContent: {
+      outcome: gate.decision.outcome,
+      termination: gate.termination ?? null,
+      mayDeploy,
+      reasons: gate.decision.reasons,
+      blockingFindings: gate.decision.blockingFindings,
+      warningFindings: gate.decision.warningFindings,
+      evidence,
+      receiptId: receipt.digest,
+      scanId: receipt.scan.id,
+      coverage: receipt.scan.coverage,
+    },
+    isError: false,
+  };
+}
+
+/** In-session receipt lookup deliberately cannot read an arbitrary caller-supplied path. */
+export function getMcpReceipt(args: Record<string, unknown>): Record<string, unknown> {
+  const requested = typeof args.receipt_id === "string" && args.receipt_id.trim()
+    ? args.receipt_id.trim()
+    : latestReceiptId;
+  const receipt = requested ? receipts.get(requested) : undefined;
+  if (!receipt) {
+    return {
+      content: [{ type: "text", text: "No matching release receipt exists in this MCP session. Run guardian_release_gate first." }],
+      structuredContent: { receipt: null, evidenceState: "UNPROVEN" },
+      isError: true,
+    };
+  }
+  return {
+    content: [{ type: "text", text: safeJson(receipt, 2) }],
+    structuredContent: { receipt },
+    isError: false,
+  };
+}
+
 export async function startMcpServer(): Promise<void> {
   const engine = buildEngine();
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -190,9 +394,9 @@ export async function startMcpServer(): Promise<void> {
             serverInfo: { name: "guardian-unit", version: VERSION },
             instructions:
               "Guardian-Unit-Penetration-Testing Agent scans code for security problems entirely on this machine. " +
-              "Call security_scan after writing or changing code and before reporting the work " +
-              "as complete. Always pass on its coverage limitations to the user; never describe " +
-              "code as secure because a scan found nothing.",
+              "Call guardian_release_gate before deployment. PASS and WARN may continue; HOLD, BLOCK, " +
+              "REFUSED, ERROR, timeout, or unreadable evidence must stop. Always pass on coverage " +
+              "limitations; never describe code as secure because a scan found nothing.",
           });
           break;
 
@@ -231,49 +435,22 @@ export async function startMcpServer(): Promise<void> {
             break;
           }
 
-          if (name !== "security_scan") {
-            failRequest(req, -32602, `Unknown tool: ${name}`);
+          if (name === "security_scan" || name === "guardian_security_scan") {
+            reply(req.id, await runMcpSecurityScan(engine, args));
             break;
           }
 
-          const target = resolve(String(args.path ?? process.cwd()));
-          const cfg = await loadConfig();
-          const only = Array.isArray(args.only) ? (args.only as string[]) : undefined;
-          const minSeverity = (args.min_severity as keyof typeof SEV_RANK) ?? "low";
+          if (name === "guardian_release_gate") {
+            reply(req.id, await runMcpReleaseGate(args));
+            break;
+          }
 
-          const result = await engine.scan(target, {
-            // Network stays off in MCP mode regardless of configuration. The
-            // assistant did not ask the user for permission to make outbound
-            // requests, and it is not the assistant's permission to give.
-            config: { ...cfg, allowNetwork: false },
-            only,
-          });
+          if (name === "guardian_get_receipt") {
+            reply(req.id, getMcpReceipt(args));
+            break;
+          }
 
-          const filtered = result.findings.filter(
-            (f) => SEV_RANK[f.severity] <= SEV_RANK[minSeverity] && f.status === "open",
-          );
-
-          reply(req.id, {
-            content: [{ type: "text", text: renderFindings(filtered, result.coverage) }],
-            structuredContent: {
-              scanId: result.scanId,
-              target: result.target.id,
-              counts: countBySeverity(filtered),
-              findings: filtered.map((f) => ({
-                id: f.id,
-                ruleId: f.ruleId,
-                severity: f.severity,
-                confidence: f.confidence,
-                title: f.title,
-                file: f.location?.file ?? null,
-                line: f.location?.startLine ?? null,
-                remediation: f.remediation.summary,
-                cwe: f.mappings.cwe ?? [],
-              })),
-              coverage: result.coverage,
-            },
-            isError: false,
-          });
+          failRequest(req, -32602, `Unknown tool: ${name}`);
           break;
         }
 

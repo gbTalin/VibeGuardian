@@ -1,4 +1,4 @@
-import type { Confidence, CoverageReport, FindingStatus, ScanResult, Severity } from "../core/types.ts";
+import type { Confidence, CoverageReport, Finding, FindingStatus, ScanResult, Severity } from "../core/types.ts";
 
 /** A deployment decision. UNPROVEN is evidence state, never an outcome. */
 export type ReleaseOutcome = "PASS" | "WARN" | "HOLD" | "BLOCK";
@@ -35,12 +35,46 @@ export interface GateDecision {
   reasons: string[];
 }
 
-/** Placeholder seam for Task 3's concrete authorized HTTP/TLS probe. */
+export interface ProbeTlsObservation {
+  authorized: boolean;
+  authorizationError?: string;
+  protocol?: string;
+  alpnProtocol?: string;
+  validFrom?: string;
+  validTo?: string;
+}
+
+export interface ProbeCookieObservation {
+  name: string;
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite?: "Strict" | "Lax" | "None";
+}
+
+export interface ProbeObservation {
+  method: "GET" | "OPTIONS";
+  url: string;
+  statusCode?: number;
+  redirect?: string;
+  headers: Record<string, string>;
+  cookieAttributes: ProbeCookieObservation[];
+  tls?: ProbeTlsObservation;
+  debugSignature?: "generic-error-signature";
+  bodyTruncated?: boolean;
+  error?: string;
+}
+
 export interface ProbeResult {
-  state: "COMPLETE" | "HOLD" | "REFUSED";
-  requiredFailures?: string[];
-  findingIds?: string[];
+  state: "COMPLETE" | "PARTIAL" | "REFUSED";
   target?: string;
+  environment?: "local" | "staging" | "production";
+  authorizationDigest?: string;
+  requestCount?: number;
+  requestBudget?: number;
+  observations?: ProbeObservation[];
+  findings?: Finding[];
+  requiredFailures?: string[];
+  limitations?: string[];
 }
 
 /** Placeholder seam for Task 4's signed local intelligence cache. */
@@ -116,6 +150,10 @@ export interface ReleaseReceipt {
 export interface GateOptions {
   root: string;
   policy?: Partial<ReleasePolicy>;
+  /** Public live-probe API: these must be supplied together. */
+  target?: string;
+  authorizationPath?: string;
+  /** Internal injection seam retained for callers that already produced evidence. */
   probe?: ProbeResult;
   intelligence?: IntelligenceStatus;
   approval?: ApprovalMetadata;
@@ -126,6 +164,7 @@ export interface GateOptions {
 
 export interface GateRun {
   scan: ScanResult;
+  probe?: ProbeResult;
   decision: GateDecision;
   receipt: ReleaseReceipt;
   termination?: GateTermination;

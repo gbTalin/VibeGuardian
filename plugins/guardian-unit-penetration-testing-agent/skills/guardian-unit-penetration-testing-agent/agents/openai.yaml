@@ -1,0 +1,4 @@
+interface:
+  display_name: "Guardian-Unit-Penetration-Testing Agent"
+  short_description: "Blocks risky deploys with a local security gate"
+  default_prompt: "Use $guardian-unit-penetration-testing-agent to check this app before deployment and explain the result in plain language."

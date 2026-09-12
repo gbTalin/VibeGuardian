@@ -1,0 +1,87 @@
+name: Guardian-Unit security release gate
+description: Run the repository-local Guardian-Unit launcher and preserve its release decision.
+inputs:
+  path:
+    description: Repository path to inspect
+    required: false
+    default: .
+  target:
+    description: Exact authorized origin; leave empty for a static-only gate
+    required: false
+    default: ""
+  authorization:
+    description: Project-local target authorization record
+    required: false
+    default: .guardian-unit/targets.json
+outputs:
+  outcome:
+    description: PASS, WARN, HOLD, or BLOCK
+    value: ${{ steps.summarize.outputs.outcome }}
+  receipt:
+    description: Path to the canonical receipt
+    value: ${{ steps.summarize.outputs.receipt }}
+  sarif:
+    description: Path to the SARIF report
+    value: ${{ steps.summarize.outputs.sarif }}
+runs:
+  using: composite
+  steps:
+    - name: Run Guardian-Unit
+      id: gate
+      shell: bash
+      env:
+        GUARDIAN_INPUT_PATH: ${{ inputs.path }}
+        GUARDIAN_INPUT_TARGET: ${{ inputs.target }}
+        GUARDIAN_INPUT_AUTHORIZATION: ${{ inputs.authorization }}
+      run: |
+        set -u
+        REPORT_DIR="$GITHUB_WORKSPACE/.guardian-unit/reports"
+        mkdir -p "$REPORT_DIR"
+
+        if [[ -f "$GITHUB_WORKSPACE/bin/guardian-unit.mjs" ]]; then
+          LAUNCHER="$GITHUB_WORKSPACE/bin/guardian-unit.mjs"
+        elif [[ -f "$GITHUB_WORKSPACE/node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs" ]]; then
+          LAUNCHER="$GITHUB_WORKSPACE/node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs"
+        else
+          printf '%s\n' '{"outcome":"HOLD","termination":"ERROR","exitCode":5,"message":"repository-local Guardian-Unit launcher not found"}' > "$REPORT_DIR/gate.json"
+          printf '%s\n' '5' > "$REPORT_DIR/gate.exit"
+          exit 0
+        fi
+
+        ARGS=("$LAUNCHER" gate "$GUARDIAN_INPUT_PATH" --json --receipt "$REPORT_DIR/receipt.json" --sarif "$REPORT_DIR/results.sarif" --markdown "$REPORT_DIR/report.md")
+        if [[ -n "$GUARDIAN_INPUT_TARGET" ]]; then
+          ARGS+=(--target "$GUARDIAN_INPUT_TARGET" --authorization "$GUARDIAN_INPUT_AUTHORIZATION")
+        fi
+
+        set +e
+        node "${ARGS[@]}" > "$REPORT_DIR/gate.json"
+        GATE_EXIT=$?
+        set -e
+        printf '%s\n' "$GATE_EXIT" > "$REPORT_DIR/gate.exit"
+
+    - name: Summarize Guardian-Unit
+      id: summarize
+      shell: bash
+      run: |
+        REPORT_DIR="$GITHUB_WORKSPACE/.guardian-unit/reports"
+        GATE_EXIT="$(cat "$REPORT_DIR/gate.exit")"
+        set +e
+        OUTCOME="$(node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const o=r.decision?.outcome??r.outcome;if(!["PASS","WARN","HOLD","BLOCK"].includes(o))process.exit(5);process.stdout.write(o)' "$REPORT_DIR/gate.json")"
+        PARSE_EXIT=$?
+        set -e
+        if [[ "$PARSE_EXIT" -ne 0 ]]; then
+          OUTCOME=HOLD
+          GATE_EXIT=5
+        fi
+
+        echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
+        echo "receipt=$REPORT_DIR/receipt.json" >> "$GITHUB_OUTPUT"
+        echo "sarif=$REPORT_DIR/results.sarif" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Guardian-Unit release gate: $OUTCOME"
+          echo
+          echo "Exit code: \`$GATE_EXIT\`"
+          echo
+          echo "Receipt, SARIF, Markdown, and raw JSON are in \`.guardian-unit/reports/\`; the calling workflow can upload that directory."
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$GATE_EXIT"

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "targets": [
+    {
+      "origin": "https://app.example.com",
+      "environment": "production",
+      "owner": "security@example.com",
+      "issuedAt": "REPLACE_WITH_CURRENT_UTC_TIMESTAMP",
+      "expiresAt": "REPLACE_WITH_A_NEAR_FUTURE_UTC_TIMESTAMP",
+      "requestBudget": 4,
+      "maxRedirects": 1,
+      "timeoutMs": 3000,
+      "ratePerSecond": 1,
+      "corsPreflight": false,
+      "approvedPaths": []
+    }
+  ]
+}

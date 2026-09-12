@@ -16,8 +16,8 @@ import { safeJson } from "./core/redact.ts";
 import { PRODUCT, TAGLINE, VERSION } from "./version.ts";
 import type { Severity } from "./core/types.ts";
 import { runGate } from "./gate/run.ts";
-import { canonicalJson, sha256 } from "./gate/receipt.ts";
-import type { ApprovalMetadata, CommitMetadata, ReleasePolicy } from "./gate/types.ts";
+import { canonicalJson } from "./gate/receipt.ts";
+import type { CommitMetadata, ReleasePolicy } from "./gate/types.ts";
 
 const execFile = promisify(execFileCallback);
 
@@ -83,8 +83,8 @@ function help(): string {
     "",
     `  ${c("1", "Gate options")}`,
     "",
-    `    --target https://app.example.com  Exact authorized origin (probe support follows in a later release)`,
-    `    --authorization targets.json      Approval record to fingerprint locally`,
+    `    --target https://app.example.com  Exact origin to probe with the fixed safe request plan`,
+    `    --authorization targets.json      Required project approval record for that exact origin`,
     `    --policy policy.json              Release-policy override`,
     `    --receipt receipt.json            Write canonical release receipt`,
     `    --sarif out.sarif                 Write SARIF with the release decision`,
@@ -232,39 +232,6 @@ async function cmdScan(args: Args): Promise<number> {
   return 0;
 }
 
-function exactOrigin(value: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error("REFUSED: --target must be an exact http(s) origin.");
-  }
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    parsed.username ||
-    parsed.password ||
-    parsed.pathname !== "/" ||
-    parsed.search ||
-    parsed.hash ||
-    parsed.origin !== value
-  ) {
-    throw new Error("REFUSED: --target must be an exact http(s) origin.");
-  }
-  return parsed.origin;
-}
-
-async function approvalFor(args: Args): Promise<ApprovalMetadata | undefined> {
-  const target = typeof args.flags.target === "string" ? exactOrigin(args.flags.target) : undefined;
-  const authorization = typeof args.flags.authorization === "string" ? args.flags.authorization : undefined;
-  if (!target && !authorization) return undefined;
-  if (!target || !authorization) throw new Error("REFUSED: --target and --authorization must be supplied together.");
-  try {
-    return { target, digest: sha256(await readFile(authorization, "utf8")) };
-  } catch {
-    throw new Error("REFUSED: authorization record could not be read.");
-  }
-}
-
 async function policyFor(args: Args): Promise<Partial<ReleasePolicy> | undefined> {
   if (typeof args.flags.policy !== "string") return undefined;
   try {
@@ -298,14 +265,31 @@ async function commitFor(root: string): Promise<CommitMetadata> {
 }
 
 async function cmdGate(args: Args): Promise<number> {
-  const target = resolve(args._[1] ?? process.cwd());
+  const root = resolve(args._[1] ?? process.cwd());
   try {
-    const [approval, policy, commit] = await Promise.all([approvalFor(args), policyFor(args), commitFor(target)]);
-    const gate = await runGate({ root: target, approval, policy, commit });
+    const liveRequested = Object.hasOwn(args.flags, "target") || Object.hasOwn(args.flags, "authorization");
+    const liveTarget = typeof args.flags.target === "string" ? args.flags.target : undefined;
+    const authorizationPath = typeof args.flags.authorization === "string" ? resolve(root, args.flags.authorization) : undefined;
+    if (liveRequested && (!liveTarget || !authorizationPath)) {
+      throw new Error("REFUSED: --target and --authorization must be supplied together with values.");
+    }
+    const [policy, commit] = await Promise.all([policyFor(args), commitFor(root)]);
+    const gate = await runGate({ root, target: liveTarget, authorizationPath, policy, commit });
     const output = args.flags.json
-      ? `${safeJson({ scan: gate.scan, decision: gate.decision, receipt: gate.receipt, termination: gate.termination, exitCode: gate.exitCode })}\n`
+      ? `${safeJson({ scan: gate.scan, probe: gate.probe, decision: gate.decision, receipt: gate.receipt, termination: gate.termination, exitCode: gate.exitCode })}\n`
       : [
           toTerminal(gate.scan, useColor),
+          ...(gate.probe
+            ? [
+                `  Live probe: ${gate.probe.state} (${gate.probe.requestCount ?? 0}/${gate.probe.requestBudget ?? 0} authorized requests)`,
+                ...(gate.probe.observations ?? []).map(
+                  (observation) =>
+                    `  - ${observation.method} ${observation.url}: ${observation.statusCode ?? observation.error ?? "no response"}${
+                      observation.tls ? `; TLS ${observation.tls.authorized ? "valid" : "INVALID"}` : ""
+                    }`,
+                ),
+              ]
+            : []),
           `  Release decision: ${gate.decision.outcome}${gate.termination ? ` (${gate.termination})` : ""} (exit ${gate.exitCode})`,
           ...gate.decision.reasons.map((reason) => `  - ${reason}`),
           "",

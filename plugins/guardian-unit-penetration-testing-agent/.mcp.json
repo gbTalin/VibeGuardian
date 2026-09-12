@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "guardian-unit": {
+      "command": "node",
+      "args": ["../../bin/guardian-unit.mjs", "mcp"],
+      "cwd": ".",
+      "env_vars": ["GUARDIAN_UNIT_HOME", "GUARDIAN_UNIT_REPO_ROOT", "PATH"],
+      "startup_timeout_sec": 10,
+      "tool_timeout_sec": 120
+    }
+  }
+}

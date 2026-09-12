@@ -1,0 +1,11 @@
+.git/
+.superpowers/
+.worktrees/
+docs/
+test/
+examples/vulnerable-app/
+node_modules/
+*.log
+*.sarif
+.guardian-unit/targets.json
+.guardian-unit/reports/

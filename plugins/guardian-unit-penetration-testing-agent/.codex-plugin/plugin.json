@@ -1,0 +1,26 @@
+{
+  "name": "guardian-unit-penetration-testing-agent",
+  "version": "0.1.0",
+  "description": "A local security release gate that checks source and configuration before a vibe-coded app deploys.",
+  "author": {
+    "name": "Talin Labs"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["security", "release-gate", "vibe-coding", "penetration-testing"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Guardian-Unit-Penetration-Testing Agent",
+    "shortDescription": "Stop risky deploys with a local security gate.",
+    "longDescription": "Scans source and configuration, optionally probes one explicitly authorized application URL, and returns a plain-language PASS, WARN, HOLD, or BLOCK release decision.",
+    "developerName": "Talin Labs",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Check this app with Guardian Unit before I deploy it.",
+      "Explain and help me fix the security gate blockers.",
+      "Rerun Guardian Unit and tell me if deployment can continue."
+    ],
+    "brandColor": "#DC2626"
+  },
+  "mcpServers": "./.mcp.json"
+}

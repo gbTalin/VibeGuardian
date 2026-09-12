@@ -1,7 +1,7 @@
 {
   "name": "guardian-unit-penetration-testing-agent",
   "version": "0.1.0",
-  "description": "Local-first security platform. Runs a roster of specialized security agents inside your own perimeter. Your code never leaves the building.",
+  "description": "Hackathon-ready local security release gate with safe source checks and explicitly authorized URL probing.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -13,6 +13,8 @@
   "scripts": {
     "start": "node bin/guardian-unit.mjs ui",
     "scan": "node bin/guardian-unit.mjs scan",
+    "setup-demo": "node scripts/setup-demo.mjs",
+    "demo": "node scripts/run-demo.mjs",
     "test": "node --test 'test/*.test.ts'",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
@@ -29,6 +31,23 @@
     "local-first",
     "air-gapped",
     "ai-security",
-    "supply-chain"
+    "supply-chain",
+    "penetration-testing",
+    "release-gate",
+    "vibe-coding"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "plugins/",
+    "templates/",
+    "security/",
+    "examples/clean-app/",
+    ".guardian-unit/targets.example.json",
+    ".github/workflows/guardian-unit-gate.yml",
+    "action.yml",
+    "README.md",
+    "LICENSE"
   ]
 }

@@ -1,0 +1,124 @@
+name: Guardian-Unit release gate
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Exact origin already listed in .guardian-unit/targets.json; blank means static only
+        required: false
+        type: string
+      environment:
+        description: Protected GitHub environment used for an authorized probe
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+jobs:
+  source-gate:
+    name: Safe source and config gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the reviewed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.18.0"
+          package-manager-cache: false
+      - name: Run static Guardian-Unit gate
+        env:
+          GUARDIAN_SCAN_PATH: .
+        run: |
+          mkdir -p .guardian-unit/reports/static
+          if [[ -f bin/guardian-unit.mjs ]]; then
+            LAUNCHER=bin/guardian-unit.mjs
+          elif [[ -f node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs ]]; then
+            LAUNCHER=node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs
+          else
+            echo "Repository-local Guardian-Unit launcher not found." >&2
+            exit 5
+          fi
+          set +e
+          node "$LAUNCHER" gate "$GUARDIAN_SCAN_PATH" --json \
+            --receipt .guardian-unit/reports/static/receipt.json \
+            --sarif .guardian-unit/reports/static/results.sarif \
+            --markdown .guardian-unit/reports/static/report.md \
+            > .guardian-unit/reports/static/gate.json
+          GATE_EXIT=$?
+          set -e
+          set +e
+          OUTCOME="$(node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const o=r.decision?.outcome??r.outcome;if(!["PASS","WARN","HOLD","BLOCK"].includes(o))process.exit(5);process.stdout.write(o)' .guardian-unit/reports/static/gate.json)"
+          PARSE_EXIT=$?
+          set -e
+          if [[ "$PARSE_EXIT" -ne 0 ]]; then OUTCOME=HOLD; GATE_EXIT=5; fi
+          printf '### Guardian-Unit source gate: %s\n\nExit code: `%s`\n' "$OUTCOME" "$GATE_EXIT" >> "$GITHUB_STEP_SUMMARY"
+          exit "$GATE_EXIT"
+      - name: Upload source-gate evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: guardian-unit-source-evidence
+          path: .guardian-unit/reports/static/
+          if-no-files-found: warn
+          retention-days: 14
+
+  authorized-probe:
+    name: Authorized deployed-app probe
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.target != '' && needs.source-gate.result == 'success' }}
+    needs: source-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: guardian-unit-${{ inputs.environment }}
+    steps:
+      - name: Check out the reviewed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.18.0"
+          package-manager-cache: false
+      - name: Run explicitly authorized probe
+        env:
+          GUARDIAN_TARGET: ${{ inputs.target }}
+        run: |
+          mkdir -p .guardian-unit/reports/probe
+          if [[ -f bin/guardian-unit.mjs ]]; then
+            LAUNCHER=bin/guardian-unit.mjs
+          elif [[ -f node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs ]]; then
+            LAUNCHER=node_modules/guardian-unit-penetration-testing-agent/bin/guardian-unit.mjs
+          else
+            echo "Repository-local Guardian-Unit launcher not found." >&2
+            exit 5
+          fi
+          set +e
+          node "$LAUNCHER" gate . --target "$GUARDIAN_TARGET" \
+            --authorization .guardian-unit/targets.json --json \
+            --receipt .guardian-unit/reports/probe/receipt.json \
+            --sarif .guardian-unit/reports/probe/results.sarif \
+            --markdown .guardian-unit/reports/probe/report.md \
+            > .guardian-unit/reports/probe/gate.json
+          GATE_EXIT=$?
+          set -e
+          set +e
+          OUTCOME="$(node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const o=r.decision?.outcome??r.outcome;if(!["PASS","WARN","HOLD","BLOCK"].includes(o))process.exit(5);process.stdout.write(o)' .guardian-unit/reports/probe/gate.json)"
+          PARSE_EXIT=$?
+          set -e
+          if [[ "$PARSE_EXIT" -ne 0 ]]; then OUTCOME=HOLD; GATE_EXIT=5; fi
+          printf '### Guardian-Unit authorized probe: %s\n\nExit code: `%s`\n' "$OUTCOME" "$GATE_EXIT" >> "$GITHUB_STEP_SUMMARY"
+          exit "$GATE_EXIT"
+      - name: Upload authorized-probe evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: guardian-unit-probe-evidence
+          path: .guardian-unit/reports/probe/
+          if-no-files-found: warn
+          retention-days: 14
