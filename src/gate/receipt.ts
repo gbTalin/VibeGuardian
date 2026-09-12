@@ -7,7 +7,7 @@ import type { EvidenceDigest, ReceiptFinding, ReceiptInput, ReleaseReceipt } fro
 const UNSAFE_RECEIPT_KEY = /(secret|token|authorization|cookie|responsebody)/i;
 
 const ABSOLUTE_FILESYSTEM_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\|\/\/)/;
-const FILESYSTEM_PATH_IN_TEXT = /(?:[A-Za-z]:[\\/]|\\\\|(?<!:)\/\/|(?<!\/)(?<!http:)(?<!https:)\/(?!\/))[^\s"'`<>\])},;]*/gi;
+const FILESYSTEM_PATH_IN_TEXT = /(^|[\s=:\[({,;!?'"`])((?:[A-Za-z]:[\\/]|\\\\|(?<!:)\/\/|(?<!http:)(?<!https:)\/(?!\/))[^\s"'`<>\])},;]*)/gi;
 const FILE_URI_IN_TEXT = /\bfile:\/\/\/?[^\s"'`<>]*/g;
 
 /** Reject dangerous fields before a value reaches the canonical receipt boundary. */
@@ -73,13 +73,14 @@ function pathTail(value: string): string {
 function sanitizeText(value: string): string {
   return redact(value)
     .replace(FILE_URI_IN_TEXT, (uri) => `[path:${pathTail(uri.replace(/^file:\/\//, ""))}]`)
-    .replace(FILESYSTEM_PATH_IN_TEXT, (path) => `[path:${pathTail(path)}]`);
+    .replace(FILESYSTEM_PATH_IN_TEXT, (_match, prefix: string, path: string) => `${prefix}[path:${pathTail(path)}]`);
 }
 
 function relativePath(value: string | undefined): string | undefined {
   if (!value) return undefined;
+  const sanitized = sanitizeText(value);
   if (ABSOLUTE_FILESYSTEM_PATH.test(value)) return pathTail(value);
-  const parts = value.replaceAll("\\", "/").split("/");
+  const parts = sanitized.replaceAll("\\", "/").split("/");
   if (parts.some((part) => part === "..")) {
     throw new Error("Receipt finding paths must be relative to the scan root.");
   }

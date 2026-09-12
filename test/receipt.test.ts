@@ -149,4 +149,24 @@ describe("release receipt", () => {
     assert.doesNotMatch(output, /\/Users\/alice|C:\\Users|\\\\server/);
     assert.match(output, /\[path:repo\/file\.ts\]/);
   });
+
+  test("scrubs diagnostic-looking absolute finding locations before relative normalization", () => {
+    const cases = [
+      "path=/Users/alice/repo/file.ts",
+      "path=C:\\Users\\alice\\repo\\file.ts",
+      "path=\\\\server\\share\\repo\\file.ts",
+    ];
+    for (const file of cases) {
+      const raw = scan({});
+      raw.findings = [{ id: file, severity: "low", confidence: "low", status: "open", location: { file, startLine: 1, endLine: 1 } }] as ScanResult["findings"];
+      const receipt = buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: raw, decision: decideRelease({ findings: [], requiredFailures: [] }) });
+      const output = canonicalJson(receipt);
+      assert.doesNotMatch(output, /\/Users\/alice|C:\\Users|\\\\server/);
+      assert.equal(receipt.findings[0].file, "path=[path:repo/file.ts]");
+    }
+    const normal = scan({});
+    normal.findings = [{ id: "normal", severity: "low", confidence: "low", status: "open", location: { file: "src/components/file.ts", startLine: 1, endLine: 1 } }] as ScanResult["findings"];
+    const normalReceipt = buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: normal, decision: decideRelease({ findings: [], requiredFailures: [] }) });
+    assert.equal(normalReceipt.findings[0].file, "src/components/file.ts");
+  });
 });
