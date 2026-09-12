@@ -1,11 +1,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile as execFileCallback } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { createServer } from "node:net";
 import { fingerprint, dedupe, rank, postureLabel, countBySeverity } from "../src/core/finding.ts";
 import { redact, redactForOutput, redactValue, safeJson, safeSnippet } from "../src/core/redact.ts";
 import { editDistance } from "../src/scanners/_shared.ts";
@@ -14,6 +15,7 @@ import { buildEngine } from "../src/scanners/index.ts";
 import { configDir } from "../src/core/config.ts";
 import { Store } from "../src/core/store.ts";
 import { toMarkdown } from "../src/report/markdown.ts";
+import { toTerminal } from "../src/report/markdown.ts";
 import { toSarif } from "../src/report/sarif.ts";
 import { makeProvider } from "../src/agents/providers.ts";
 import { PRODUCT } from "../src/version.ts";
@@ -21,6 +23,27 @@ import type { Finding } from "../src/core/types.ts";
 
 const execFile = promisify(execFileCallback);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((done) => server.close(() => done()));
+  return port;
+}
+
+async function childOutput(args: string[], input: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolveOutput, reject) => {
+    const child = spawn(process.execPath, args, { cwd: ROOT, env, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stderr.on("data", (chunk) => { err += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => code === 0 ? resolveOutput(out) : reject(new Error(`child ${code}: ${err}`)));
+    child.stdin.end(input);
+  });
+}
 
 function mkFinding(over: Partial<Finding> = {}): Finding {
   return {
@@ -258,6 +281,16 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
     try {
       store.setTriage("x", "/repo", "triaged", `keep private: ${secret}`);
       const triaged = store.applyTriage([mkFinding()], "/repo");
+      const persisted = {
+        scanId: "00000000-0000-4000-8000-000000000000",
+        target: triaged[0].target,
+        startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1000,
+        findings: [mkFinding({ title: secret, note: secret })], warnings: [secret],
+        coverage: { filesScanned: 1, filesSkipped: 0, skipReasons: {}, scannersRun: [], scannersSkipped: [], agentAnalysisRan: false, limitations: [] }, guardianUnitVersion: "0.1.0",
+      };
+      store.saveScan(persisted);
+      const rawDb = (await readFile(join(dir, "history.db"))).toString("utf8");
+      assert.ok(!rawDb.includes(secret));
       const json = safeJson({ ...triaged[0], warnings: [providerWarning] }, 2);
       const markdown = toMarkdown({
         scanId: "00000000-0000-4000-8000-000000000000",
@@ -282,11 +315,49 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
         guardianUnitVersion: "0.1.0",
       });
       for (const output of [json, markdown, sarif]) assert.ok(!output.includes(secret));
+      assert.ok(!toTerminal(persisted, false).includes(secret));
       assert.ok(!sarif.includes(bodySentinel));
       assert.equal(JSON.parse(sarif).runs[0].tool.driver.name, "Guardian-Unit-Penetration-Testing Agent");
       assert.equal(PRODUCT, "Guardian-Unit-Penetration-Testing Agent");
     } finally {
       store.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("MCP, CLI, and dashboard static scans redact output and never call fetch", async () => {
+    const dir = await mkdtemp("/tmp/guardian-unit-public-");
+    const log = join(dir, "fetch.log");
+    const hook = join(dir, "fetch-hook.mjs");
+    await writeFile(hook, `import { appendFile } from 'node:fs/promises'; globalThis.fetch = async (url) => { await appendFile(process.env.GUARDIAN_FETCH_LOG, String(url) + '\\n'); throw new Error('outbound blocked') };`);
+    const env = { ...process.env, GUARDIAN_UNIT_HOME: join(dir, "home"), GUARDIAN_FETCH_LOG: log, NODE_OPTIONS: `--import=${hook}` };
+    try {
+      const { stdout: cli } = await execFile(process.execPath, ["bin/guardian-unit.mjs", "scan", "examples/vulnerable-app", "--json"], { cwd: ROOT, env });
+      assert.ok(!cli.includes("AKIAIOSFODNN7EXAMPLE") && !cli.includes("hunter2"));
+
+      const mcp = await childOutput(["bin/guardian-unit.mjs", "mcp"], `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "security_scan", arguments: { path: join(ROOT, "examples/vulnerable-app") } } })}\n`, env);
+      assert.equal(JSON.parse(mcp).id, 1);
+      assert.ok(!mcp.includes("AKIAIOSFODNN7EXAMPLE") && !mcp.includes("hunter2"));
+
+      const port = await freePort();
+      const server = spawn(process.execPath, ["bin/guardian-unit.mjs", "ui", ROOT, "--port", String(port), "--no-open"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+      let startup = "";
+      await new Promise<void>((done, reject) => {
+        server.stdout.on("data", (chunk) => { startup += chunk; if (startup.includes("token=")) done(); });
+        server.once("error", reject);
+      });
+      const token = /token=([0-9a-f-]+)/.exec(startup)?.[1];
+      assert.ok(token);
+      const bad = await fetch(`http://127.0.0.1:${port}/api/browse?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "/tmp/AKIAIOSFODNN7EXAMPLE" }) });
+      const badText = await bad.text();
+      assert.ok(!badText.includes("AKIAIOSFODNN7EXAMPLE"));
+      const scan = await fetch(`http://127.0.0.1:${port}/api/scan?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: join(ROOT, "examples/vulnerable-app"), network: true, domains: "ignored.example" }) });
+      const sse = await scan.text();
+      server.kill("SIGTERM");
+      assert.ok(!sse.includes("AKIAIOSFODNN7EXAMPLE") && !sse.includes("hunter2"));
+      const fetchLog = await readFile(log, "utf8").catch(() => "");
+      assert.equal(fetchLog, "", `static entry point made outbound requests: ${fetchLog}`);
+    } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });

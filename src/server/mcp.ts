@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import { buildEngine } from "../scanners/index.ts";
 import { loadConfig } from "../core/config.ts";
 import { countBySeverity } from "../core/finding.ts";
+import { redact, redactForOutput, safeJson } from "../core/redact.ts";
 import { VERSION } from "../version.ts";
 import type { Finding } from "../core/types.ts";
 
@@ -78,6 +79,8 @@ const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
 /** Render findings as text an assistant can act on directly. */
 function renderFindings(findings: Finding[], coverage: { filesScanned: number; limitations: string[] }): string {
+  findings = redactForOutput(findings);
+  coverage = redactForOutput(coverage);
   if (findings.length === 0) {
     return [
       "No findings matched the rules that ran.",
@@ -137,12 +140,14 @@ export async function startMcpServer(): Promise<void> {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
   const send = (message: Record<string, unknown>) => {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    // JSON-RPC framing remains one compact JSON document per line; only the
+    // payload is transformed at this public-output boundary.
+    process.stdout.write(`${safeJson(message)}\n`);
   };
   const reply = (id: JsonRpcRequest["id"], result: unknown) =>
     send({ jsonrpc: "2.0", id, result });
   const fail = (id: JsonRpcRequest["id"], code: number, message: string) =>
-    send({ jsonrpc: "2.0", id, error: { code, message } });
+    send({ jsonrpc: "2.0", id, error: { code, message: redact(message) } });
 
   // Diagnostics go to stderr. Anything on stdout that is not a JSON-RPC
   // message corrupts the transport.
@@ -271,7 +276,7 @@ export async function startMcpServer(): Promise<void> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (req.id !== undefined && req.id !== null) fail(req.id, -32603, message);
-      else process.stderr.write(`guardian-unit-mcp: ${message}\n`);
+      else process.stderr.write(`guardian-unit-mcp: ${redact(message)}\n`);
     }
   }
 }

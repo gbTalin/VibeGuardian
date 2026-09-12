@@ -65,3 +65,26 @@ DONE
 - The prior retained-surface concern is resolved: no legacy surface-probe source remains.
 - Static scan entry points are offline regardless of client/UI request fields; provider review remains an explicit separate feature and may use the configured provider.
 - `npm run typecheck` remains unavailable in this clean worktree because TypeScript is declared but not installed; the full Node-native TypeScript test/CLI paths pass.
+
+## Fix round 2/5 — MCP and public-output hardening
+
+### Changes
+
+- Routed every MCP JSON-RPC response and error through `safeJson`, while preserving one compact JSON object per stdout line; MCP text rendering now redacts findings and coverage before interpolation and stderr errors are redacted.
+- Extended terminal redaction and SQLite regression coverage, including raw database-file inspection after persistence.
+- Added real subprocess integration coverage with an injected `fetch` hook: CLI JSON, MCP `security_scan`, and dashboard JSON/SSE scans remain offline even when request metadata asks for network/domain behavior.
+- Added real dashboard API coverage for redacted JSON errors and redacted SSE scan output, using a temporary loopback server and request token.
+
+### Commands and exact results
+
+| Command | Result |
+| --- | --- |
+| `node --test test/core.test.ts` | PASS — 20 tests, 5 suites, 0 failures (652.730 ms). |
+| `npm test` | PASS — 20 tests, 5 suites, 0 failures (636.074 ms). |
+| `git diff --check` | PASS — no whitespace errors. |
+
+### Self-review
+
+- MCP framing remains JSON Lines: output is still one JSON-RPC document per line after redaction.
+- The no-outbound test uses real subprocess behavior and records every child-process `fetch` call; its log was empty for CLI, MCP, and dashboard static scans.
+- The internal `Engine` library can still accept an explicit `allowNetwork: true`; public CLI, dashboard, and MCP static scan paths continue to force it false.
