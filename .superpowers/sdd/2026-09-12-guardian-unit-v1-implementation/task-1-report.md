@@ -111,3 +111,39 @@ DONE
 - The raw SQLite-file regression uses secret-bearing target ID, target label, and finding file values; raw database bytes contain none of the sentinel.
 - MCP regression forces a raw secret through both final JSON-RPC and stderr diagnostic boundaries and parses the resulting JSON-RPC output.
 - Dashboard coverage now includes raw secret-bearing actual scan metadata in SSE and subsequent JSON report output, rather than only an API error path.
+
+## Fix round 4/5 — live protocol, report-header, and timeout coverage
+
+### Changes
+
+- Routed request failures through a notification-aware MCP error boundary. Requests, including a JSON-RPC `null` id, receive JSON-RPC errors; notifications with no `id` receive no stdout response and write a redacted diagnostic to stderr.
+- Added a spawned MCP integration exchange containing a secret-bearing successful `security_scan`, a secret-bearing unknown-tool request, and a secret-bearing unknown-method notification. The test observes exactly two stdout lines, parses each line as one JSON-RPC document, verifies the success and error ids/codes, verifies masked sentinel text in each stdout response and the stderr diagnostic, and verifies the raw sentinel is absent from both streams.
+- Redacted, normalized to the ASCII filename character set `[A-Za-z0-9._-]`, and capped the dashboard report target label before constructing `Content-Disposition`.
+- Replaced the dashboard test's separate fetch/body operations with one abort-controlled helper whose five-second deadline covers both `fetch()` and `response.text()`. This bounds the JSON error, SSE, and report body reads. Dashboard termination remains in `finally`: it sends `SIGTERM` and awaits closure, then sends `SIGKILL` and awaits closure if the graceful deadline expires.
+- Strengthened the live dashboard report assertion to require HTTP 200, parse the actual response body as JSON, match its `scanId`, observe the masked sentinel and reject the raw sentinel in the body, reject the raw sentinel across all response headers, and require a normalized JSON attachment filename in `Content-Disposition`.
+
+### Covering tests
+
+- `live MCP responses, request errors, and notification errors are framed and redacted`
+- `MCP, CLI, and dashboard static scans redact output and never call fetch`
+
+### Commands and exact results
+
+| Command | Result |
+| --- | --- |
+| `node --test test/core.test.ts` | PASS — 22 tests, 5 suites, 0 failures, 0 cancelled, 0 skipped, 0 todo (726.943291 ms). |
+| `npm test` | PASS — 22 tests, 5 suites, 0 failures, 0 cancelled, 0 skipped, 0 todo (689.70825 ms). |
+| `git diff --check` | PASS — no whitespace errors. |
+
+### Files changed
+
+- `src/server/mcp.ts`
+- `src/server/server.ts`
+- `test/core.test.ts`
+- `.superpowers/sdd/2026-09-12-guardian-unit-v1-implementation/task-1-report.md`
+
+### Self-review and concerns
+
+- The live MCP test exercises the real `guardian-unit mcp` stdin/stdout/stderr loop, not only the exported serialization helpers. Its unknown tool and unknown method are legitimate untrusted values in the corresponding protocol diagnostics, so the test can prove active redaction rather than merely prove that input was omitted.
+- The dashboard report test exercises a real loopback server and a completed scan whose target label contains the sentinel; the parsed response and header assertions therefore cover the actual report handler.
+- No product concern remains for the four round-4 findings. The loopback integration tests require an environment that permits binding to `127.0.0.1`; the managed filesystem sandbox denied that bind with `EPERM`, so the two recorded full-suite runs were executed with loopback permission.

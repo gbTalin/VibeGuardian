@@ -44,16 +44,54 @@ async function freePort(): Promise<number> {
 }
 
 async function childOutput(args: string[], input: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return (await childResult(args, input, env)).stdout;
+}
+
+async function childResult(
+  args: string[],
+  input: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolveOutput, reject) => {
     const child = spawn(process.execPath, args, { cwd: ROOT, env, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 5_000);
     child.stdout.on("data", (chunk) => { out += chunk; });
     child.stderr.on("data", (chunk) => { err += chunk; });
-    child.once("error", reject);
-    child.once("close", (code) => code === 0 ? resolveOutput(out) : reject(new Error(`child ${code}: ${err}`)));
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new Error(`child timed out after 5000ms: ${err}`));
+      else if (code === 0) resolveOutput({ stdout: out, stderr: err });
+      else reject(new Error(`child ${code}: ${err}`));
+    });
     child.stdin.end(input);
   });
+}
+
+async function fetchText(
+  url: string,
+  init: RequestInit,
+  ms: number,
+  label: string,
+): Promise<{ response: Response; text: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const text = await response.text();
+    return { response, text };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`${label} timed out after ${ms}ms`, { cause: error });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function mkFinding(over: Partial<Finding> = {}): Finding {
@@ -345,6 +383,39 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
     assert.doesNotThrow(() => JSON.parse(rpc));
   });
 
+  test("live MCP responses, request errors, and notification errors are framed and redacted", async () => {
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const target = await mkdtemp(`/tmp/${secret}-mcp-`);
+    const env = { ...process.env, GUARDIAN_UNIT_HOME: join(target, "home") };
+    const input = [
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "security_scan", arguments: { path: target } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: `${secret}-unknown`, arguments: {} } },
+      { jsonrpc: "2.0", method: `${secret}-notification` },
+    ].map((message) => JSON.stringify(message)).join("\n") + "\n";
+
+    try {
+      const { stdout, stderr } = await childResult(["bin/guardian-unit.mjs", "mcp"], input, env);
+      assert.ok(!stdout.includes(secret), "MCP stdout exposed the raw sentinel");
+      assert.ok(!stderr.includes(secret), "MCP stderr exposed the raw sentinel");
+      assert.ok(stdout.includes(redact(secret)), "live MCP stdout did not exercise redaction");
+      assert.ok(stderr.includes(redact(secret)), "live notification diagnostic did not exercise redaction");
+
+      const lines = stdout.trim().split("\n");
+      assert.equal(lines.length, 2, "notification errors must not add a JSON-RPC response line");
+      assert.ok(lines[0].includes(redact(secret)), "live success response did not redact its target");
+      assert.ok(lines[1].includes(redact(secret)), "live error response did not redact its tool name");
+      const messages = lines.map((line) => JSON.parse(line));
+      assert.deepEqual(messages.map((message) => message.id), [1, 2]);
+      assert.equal(messages[0].jsonrpc, "2.0");
+      assert.equal(messages[0].result.isError, false);
+      assert.equal(messages[1].jsonrpc, "2.0");
+      assert.equal(messages[1].error.code, -32602);
+      assert.match(stderr, /guardian-unit-mcp: Method not found:/);
+    } finally {
+      await rm(target, { recursive: true, force: true });
+    }
+  });
+
   test("MCP, CLI, and dashboard static scans redact output and never call fetch", async () => {
     const dir = await mkdtemp("/tmp/guardian-unit-public-");
     const log = join(dir, "fetch.log");
@@ -372,16 +443,39 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
       }), 5_000, "dashboard startup");
       const token = /token=([0-9a-f-]+)/.exec(startup)?.[1];
       assert.ok(token);
-      const bad = await within(fetch(`http://127.0.0.1:${port}/api/browse?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `/tmp/${secret}` }) }), 5_000, "dashboard JSON request");
-      const badText = await bad.text();
+      const { text: badText } = await fetchText(
+        `http://127.0.0.1:${port}/api/browse?token=${token}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `/tmp/${secret}` }) },
+        5_000,
+        "dashboard JSON response",
+      );
       assert.ok(!badText.includes(secret));
-      const scan = await within(fetch(`http://127.0.0.1:${port}/api/scan?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: secretTarget, network: true, domains: "ignored.example" }) }), 5_000, "dashboard SSE request");
-      const sse = await within(scan.text(), 5_000, "dashboard SSE response");
+      const { text: sse } = await fetchText(
+        `http://127.0.0.1:${port}/api/scan?token=${token}`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: secretTarget, network: true, domains: "ignored.example" }) },
+        5_000,
+        "dashboard SSE response",
+      );
       assert.ok(!sse.includes(secret) && !sse.includes("hunter2"));
       const scanId = /"scanId":"([0-9a-f-]{36})"/.exec(sse)?.[1];
       assert.ok(scanId);
-      const report = await within(fetch(`http://127.0.0.1:${port}/api/report/${scanId}.json?token=${token}`), 5_000, "dashboard report request");
-      assert.ok(!(await report.text()).includes(secret));
+      const { response: report, text: reportText } = await fetchText(
+        `http://127.0.0.1:${port}/api/report/${scanId}.json?token=${token}`,
+        {},
+        5_000,
+        "dashboard report response",
+      );
+      assert.equal(report.status, 200);
+      const reportJson = JSON.parse(reportText);
+      assert.equal(reportJson.scanId, scanId);
+      assert.ok(reportText.includes(redact(secret)), "report body did not exercise redaction");
+      assert.ok(!reportText.includes(secret), "report body exposed the raw sentinel");
+      const responseHeaders = [...report.headers.entries()].map(([name, value]) => `${name}: ${value}`).join("\n");
+      assert.ok(!responseHeaders.includes(secret), "report headers exposed the raw sentinel");
+      assert.match(
+        report.headers.get("content-disposition") ?? "",
+        /^attachment; filename="guardian-unit-[A-Za-z0-9._-]+\.json"$/,
+      );
       const fetchLog = await readFile(log, "utf8").catch(() => "");
       assert.equal(fetchLog, "", `static entry point made outbound requests: ${fetchLog}`);
     } finally {

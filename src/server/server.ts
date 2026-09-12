@@ -54,6 +54,15 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+function reportFilename(label: string, format: string): string {
+  const normalized = redact(label)
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `guardian-unit-${normalized || "scan"}.${format}`;
+}
+
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -366,7 +375,7 @@ export async function startServer(opts: ServerOptions): Promise<void> {
         const [content, type] = bodies[format];
         res.writeHead(200, {
           "content-type": type,
-          "content-disposition": `attachment; filename="guardian-unit-${result.target.label}.${format}"`,
+          "content-disposition": `attachment; filename="${reportFilename(result.target.label, format)}"`,
         });
         res.end(content);
         return;

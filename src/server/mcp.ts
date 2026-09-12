@@ -158,6 +158,12 @@ export async function startMcpServer(): Promise<void> {
     send({ jsonrpc: "2.0", id, result });
   const fail = (id: JsonRpcRequest["id"], code: number, message: string) =>
     send({ jsonrpc: "2.0", id, error: { code, message: redact(message) } });
+  const failRequest = (req: JsonRpcRequest, code: number, message: string) => {
+    // JSON-RPC notifications never receive a response. Keep their failures on
+    // stderr so stdout remains a valid JSON Lines protocol stream.
+    if (req.id === undefined) process.stderr.write(formatMcpDiagnostic(message));
+    else fail(req.id, code, message);
+  };
 
   // Diagnostics go to stderr. Anything on stdout that is not a JSON-RPC
   // message corrupts the transport.
@@ -226,7 +232,7 @@ export async function startMcpServer(): Promise<void> {
           }
 
           if (name !== "security_scan") {
-            fail(req.id, -32602, `Unknown tool: ${name}`);
+            failRequest(req, -32602, `Unknown tool: ${name}`);
             break;
           }
 
@@ -279,14 +285,11 @@ export async function startMcpServer(): Promise<void> {
           break;
 
         default:
-          if (req.id !== undefined && req.id !== null) {
-            fail(req.id, -32601, `Method not found: ${req.method}`);
-          }
+          failRequest(req, -32601, `Method not found: ${req.method}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (req.id !== undefined && req.id !== null) fail(req.id, -32603, message);
-      else process.stderr.write(formatMcpDiagnostic(message));
+      failRequest(req, -32603, message);
     }
   }
 }
