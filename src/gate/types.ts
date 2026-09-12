@@ -86,6 +86,7 @@ export interface ReceiptInput {
   intelligence?: IntelligenceStatus;
   approval?: ApprovalMetadata;
   commit?: CommitMetadata;
+  termination?: GateTermination;
 }
 
 export interface ReleaseReceipt {
@@ -106,6 +107,8 @@ export interface ReleaseReceipt {
   };
   findings: ReceiptFinding[];
   outcome: ReleaseOutcome;
+  /** REFUSED/ERROR are terminal evidence states, deliberately not outcomes. */
+  termination?: GateTermination;
   exitCode: GateExitCode;
   digest: string;
 }
@@ -125,5 +128,6 @@ export interface GateRun {
   scan: ScanResult;
   decision: GateDecision;
   receipt: ReleaseReceipt;
+  termination?: GateTermination;
   exitCode: GateExitCode;
 }

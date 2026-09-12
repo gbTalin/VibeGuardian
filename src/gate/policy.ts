@@ -7,6 +7,11 @@ export const DEFAULT_RELEASE_POLICY: ReleasePolicy = {
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"] as const;
 
+/** Locale-independent ordering for canonical policy and receipt facts. */
+export function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function isAtOrAbove(severity: GateFinding["severity"], threshold: GateFinding["severity"]): boolean {
   return SEVERITY_ORDER.indexOf(severity) <= SEVERITY_ORDER.indexOf(threshold);
 }
@@ -25,12 +30,12 @@ export function decideRelease(input: GateInput): GateDecision {
         isAtOrAbove(finding.severity, policy.blockAtOrAbove),
     )
     .map((finding) => finding.id)
-    .sort();
+    .sort(compareCodeUnits);
   const warningFindings = open
     .filter((finding) => !blockingFindings.includes(finding.id))
     .map((finding) => finding.id)
-    .sort();
-  const requiredFailures = [...new Set(input.requiredFailures.map((failure) => failure.trim()).filter(Boolean))].sort();
+    .sort(compareCodeUnits);
+  const requiredFailures = [...new Set(input.requiredFailures.map((failure) => failure.trim()).filter(Boolean))].sort(compareCodeUnits);
 
   const outcome: ReleaseOutcome =
     blockingFindings.length > 0 ? "BLOCK" : requiredFailures.length > 0 ? "HOLD" : warningFindings.length > 0 ? "WARN" : "PASS";

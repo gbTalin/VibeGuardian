@@ -302,17 +302,25 @@ async function cmdGate(args: Args): Promise<number> {
   try {
     const [approval, policy, commit] = await Promise.all([approvalFor(args), policyFor(args), commitFor(target)]);
     const gate = await runGate({ root: target, approval, policy, commit });
-    if (args.flags.json) {
-      stdout.write(`${safeJson({ scan: gate.scan, decision: gate.decision, receipt: gate.receipt, exitCode: gate.exitCode })}\n`);
-    } else {
-      stdout.write(toTerminal(gate.scan, useColor));
-      stdout.write(`  Release decision: ${gate.decision.outcome} (exit ${gate.exitCode})\n`);
-      for (const reason of gate.decision.reasons) stdout.write(`  - ${reason}\n`);
-      stdout.write("\n");
-    }
-    if (typeof args.flags.receipt === "string") await writeFile(args.flags.receipt, `${canonicalJson(gate.receipt)}\n`);
-    if (typeof args.flags.sarif === "string") await writeFile(args.flags.sarif, toSarif(gate.scan, { gate: gate.decision }));
-    if (typeof args.flags.markdown === "string") await writeFile(args.flags.markdown, toMarkdown(gate.scan, { gate: gate.decision }));
+    const output = args.flags.json
+      ? `${safeJson({ scan: gate.scan, decision: gate.decision, receipt: gate.receipt, termination: gate.termination, exitCode: gate.exitCode })}\n`
+      : [
+          toTerminal(gate.scan, useColor),
+          `  Release decision: ${gate.decision.outcome}${gate.termination ? ` (${gate.termination})` : ""} (exit ${gate.exitCode})`,
+          ...gate.decision.reasons.map((reason) => `  - ${reason}`),
+          "",
+        ].join("\n");
+    const receiptArtifact = typeof args.flags.receipt === "string" ? `${canonicalJson(gate.receipt)}\n` : undefined;
+    const sarifArtifact = typeof args.flags.sarif === "string" ? toSarif(gate.scan, { gate: gate.decision }) : undefined;
+    const markdownArtifact = typeof args.flags.markdown === "string" ? toMarkdown(gate.scan, { gate: gate.decision }) : undefined;
+
+    // Artifact generation/writes are fallible. Complete them before stdout so
+    // JSON consumers receive exactly one terminal document, never success then error.
+    if (receiptArtifact !== undefined) await writeFile(args.flags.receipt as string, receiptArtifact);
+    if (sarifArtifact !== undefined) await writeFile(args.flags.sarif as string, sarifArtifact);
+    if (markdownArtifact !== undefined) await writeFile(args.flags.markdown as string, markdownArtifact);
+
+    stdout.write(output);
     return gate.exitCode;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -529,5 +537,7 @@ async function main(): Promise<void> {
 main().catch((err) => {
   process.stderr.write(`\n  ${c("1;31", "Guardian-Unit-Penetration-Testing Agent hit an error:")} ${err instanceof Error ? err.message : String(err)}\n\n`);
   if (process.env.GUARDIAN_UNIT_DEBUG) console.error(err);
-  process.exitCode = 5;
+  // Gate failures are contained by cmdGate and return its documented exit 5.
+  // Preserve the inherited non-gate command error mapping.
+  process.exitCode = 2;
 });

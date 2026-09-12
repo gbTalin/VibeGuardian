@@ -1,7 +1,7 @@
 import { buildEngine } from "../scanners/index.ts";
 import { loadConfig, type GuardianUnitConfig } from "../core/config.ts";
 import { VERSION } from "../version.ts";
-import { decideRelease, exitCodeFor } from "./policy.ts";
+import { compareCodeUnits, decideRelease, exitCodeFor } from "./policy.ts";
 import { buildReceipt, canonicalJson, sha256 } from "./receipt.ts";
 import type { GateOptions, GateRun } from "./types.ts";
 
@@ -10,7 +10,7 @@ function ruleDigest(): { version: string; digest: string } {
   const rules = engine
     .list()
     .flatMap((scanner) => scanner.rules.map((rule) => ({ scanner: scanner.name, ...rule })))
-    .sort((a, b) => `${a.scanner}:${a.id}`.localeCompare(`${b.scanner}:${b.id}`));
+    .sort((a, b) => compareCodeUnits(`${a.scanner}:${a.id}`, `${b.scanner}:${b.id}`));
   return { version: VERSION, digest: sha256(canonicalJson(rules)) };
 }
 
@@ -18,7 +18,7 @@ function requiredScanFailures(scan: GateRun["scan"]): string[] {
   return scan.coverage.scannersSkipped
     .filter((scanner) => scanner.reason.startsWith("error:"))
     .map((scanner) => `scanner ${scanner.name} failed`)
-    .sort();
+    .sort(compareCodeUnits);
 }
 
 /**
@@ -31,6 +31,7 @@ export async function runGate(options: GateOptions): Promise<GateRun> {
   const engine = buildEngine();
   const scan = await engine.scan(options.root, { config });
   const requiredFailures = requiredScanFailures(scan);
+  const termination = options.probe?.state === "REFUSED" ? "REFUSED" as const : undefined;
 
   if (options.probe) {
     requiredFailures.push(...(options.probe.requiredFailures ?? []));
@@ -56,6 +57,7 @@ export async function runGate(options: GateOptions): Promise<GateRun> {
     intelligence: options.intelligence ?? { state: "UNPROVEN" },
     approval: options.approval,
     commit: options.commit,
+    termination,
   });
-  return { scan, decision, receipt, exitCode: exitCodeFor(decision.outcome) };
+  return { scan, decision, receipt, termination, exitCode: exitCodeFor(termination ?? decision.outcome) };
 }

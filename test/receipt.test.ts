@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { buildReceipt, canonicalJson } from "../src/gate/receipt.ts";
+import { buildReceipt, canonicalJson, sha256 } from "../src/gate/receipt.ts";
 import { decideRelease } from "../src/gate/policy.ts";
 import type { ScanResult } from "../src/core/types.ts";
 
@@ -57,6 +57,71 @@ describe("release receipt", () => {
   test("rejects secret-bearing keys before receipt creation", () => {
     for (const key of ["secret", "token", "authorization", "cookie", "responseBody"]) {
       assert.throws(() => canonicalJson({ [key]: "must not appear" }), /unsafe receipt key/i);
+    }
+  });
+
+  test("uses code-unit key ordering and recomputes the digest from the unsigned receipt", () => {
+    assert.equal(canonicalJson({ z: 1, "Ä": 2, a: 3, A: 4, "!": 5 }), '{"!":5,"A":4,"a":3,"z":1,"Ä":2}');
+    const receipt = buildReceipt({
+      generatedAt: "2026-09-12T18:00:02.000Z",
+      scan: scan({}),
+      decision: decideRelease({ findings: [], requiredFailures: [] }),
+    });
+    const { digest, ...unsigned } = receipt;
+    assert.equal(digest, sha256(canonicalJson(unsigned)));
+  });
+
+  test("projects raw scanner input without exposing secrets or absolute paths", () => {
+    const raw = scan({ "/Users/alice/repo/private": 1, "C:\\Users\\alice\\repo": 2, "\\\\server\\share\\repo": 3 });
+    raw.coverage.scannersSkipped = [{ name: "code", reason: "failed at C:\\Users\\alice\\repo\\src\\x.ts" }];
+    raw.coverage.limitations = ["See /Users/alice/repo/.guardianignore", "UNC \\\\server\\share\\logs", "file:///Users/alice/repo/config"];
+    raw.warnings = ["warning at /Users/alice/repo/.env with AKIAIOSFODNN7EXAMPLE"];
+    raw.findings = [
+      {
+        id: "fingerprint",
+        severity: "high",
+        confidence: "high",
+        status: "open",
+        location: { file: "C:\\Users\\alice\\repo\\src\\file.ts", startLine: 1, endLine: 1 },
+        evidence: "cookie=session=super-secret-value AKIAIOSFODNN7EXAMPLE",
+        description: "raw response body must not enter the receipt",
+      },
+    ] as ScanResult["findings"];
+    const receipt = buildReceipt({
+      generatedAt: "2026-09-12T18:00:02.000Z",
+      scan: raw,
+      decision: decideRelease({ findings: [], requiredFailures: [] }),
+    });
+    const output = canonicalJson(receipt);
+    assert.ok(!/\/Users\/alice|C:\\Users|\\\\server|file:\/\/\/Users|AKIAIOSFODNN7EXAMPLE|super-secret-value/.test(output));
+    assert.equal(receipt.findings[0].file, "src/file.ts");
+  });
+
+  test("rejects parent traversal but accepts names beginning with two dots", () => {
+    const parent = scan({});
+    parent.findings = [{ id: "parent", severity: "low", confidence: "low", status: "open", location: { file: "../outside.ts", startLine: 1, endLine: 1 } }] as ScanResult["findings"];
+    assert.throws(
+      () => buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: parent, decision: decideRelease({ findings: [], requiredFailures: [] }) }),
+      /relative/i,
+    );
+
+    const valid = scan({});
+    valid.findings = [{ id: "dots", severity: "low", confidence: "low", status: "open", location: { file: "..notes/check.ts", startLine: 1, endLine: 1 } }] as ScanResult["findings"];
+    const receipt = buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: valid, decision: decideRelease({ findings: [], requiredFailures: [] }) });
+    assert.equal(receipt.findings[0].file, "..notes/check.ts");
+  });
+
+  test("projects POSIX, Windows-drive, and UNC finding paths to relative context", () => {
+    const cases = [
+      ["/private/alice/repository/src/posix.ts", "src/posix.ts"],
+      ["D:\\work\\repository\\src\\windows.ts", "src/windows.ts"],
+      ["\\\\server\\share\\repository\\src\\unc.ts", "src/unc.ts"],
+    ];
+    for (const [path, expected] of cases) {
+      const raw = scan({});
+      raw.findings = [{ id: `path-${expected}`, severity: "low", confidence: "low", status: "open", location: { file: path, startLine: 1, endLine: 1 } }] as ScanResult["findings"];
+      const receipt = buildReceipt({ generatedAt: "2026-09-12T18:00:02.000Z", scan: raw, decision: decideRelease({ findings: [], requiredFailures: [] }) });
+      assert.equal(receipt.findings[0].file, expected);
     }
   });
 });
