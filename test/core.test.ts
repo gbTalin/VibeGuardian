@@ -18,11 +18,22 @@ import { toMarkdown } from "../src/report/markdown.ts";
 import { toTerminal } from "../src/report/markdown.ts";
 import { toSarif } from "../src/report/sarif.ts";
 import { makeProvider } from "../src/agents/providers.ts";
+import { formatMcpDiagnostic, serializeMcpMessage } from "../src/server/mcp.ts";
 import { PRODUCT } from "../src/version.ts";
 import type { Finding } from "../src/core/types.ts";
 
 const execFile = promisify(execFileCallback);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function within<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolveWithin, rejectWithin) => {
+    const timer = setTimeout(() => rejectWithin(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolveWithin(value); },
+      (error) => { clearTimeout(timer); rejectWithin(error); },
+    );
+  });
+}
 
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -283,9 +294,9 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
       const triaged = store.applyTriage([mkFinding()], "/repo");
       const persisted = {
         scanId: "00000000-0000-4000-8000-000000000000",
-        target: triaged[0].target,
+        target: { ...triaged[0].target, id: `/tmp/${secret}`, label: secret },
         startedAt: "2026-01-01T00:00:00.000Z", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1000,
-        findings: [mkFinding({ title: secret, note: secret })], warnings: [secret],
+        findings: [mkFinding({ title: secret, note: secret, location: { file: `src/${secret}.ts`, startLine: 1, endLine: 1 } })], warnings: [secret],
         coverage: { filesScanned: 1, filesSkipped: 0, skipReasons: {}, scannersRun: [], scannersSkipped: [], agentAnalysisRan: false, limitations: [] }, guardianUnitVersion: "0.1.0",
       };
       store.saveScan(persisted);
@@ -325,10 +336,22 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
     }
   });
 
+  test("MCP final JSON-RPC and diagnostic boundaries redact forced secrets", () => {
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const rpc = serializeMcpMessage({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: `raw ${secret}` } });
+    const diagnostic = formatMcpDiagnostic(`raw ${secret}`);
+    assert.ok(!rpc.includes(secret));
+    assert.ok(!diagnostic.includes(secret));
+    assert.doesNotThrow(() => JSON.parse(rpc));
+  });
+
   test("MCP, CLI, and dashboard static scans redact output and never call fetch", async () => {
     const dir = await mkdtemp("/tmp/guardian-unit-public-");
     const log = join(dir, "fetch.log");
     const hook = join(dir, "fetch-hook.mjs");
+    const secret = "AKIAIOSFODNN7EXAMPLE";
+    const secretTarget = await mkdtemp(`/tmp/${secret}-`);
+    let server: ReturnType<typeof spawn> | undefined;
     await writeFile(hook, `import { appendFile } from 'node:fs/promises'; globalThis.fetch = async (url) => { await appendFile(process.env.GUARDIAN_FETCH_LOG, String(url) + '\\n'); throw new Error('outbound blocked') };`);
     const env = { ...process.env, GUARDIAN_UNIT_HOME: join(dir, "home"), GUARDIAN_FETCH_LOG: log, NODE_OPTIONS: `--import=${hook}` };
     try {
@@ -340,24 +363,38 @@ describe("Guardian-Unit-Penetration-Testing Agent integration contracts", () => 
       assert.ok(!mcp.includes("AKIAIOSFODNN7EXAMPLE") && !mcp.includes("hunter2"));
 
       const port = await freePort();
-      const server = spawn(process.execPath, ["bin/guardian-unit.mjs", "ui", ROOT, "--port", String(port), "--no-open"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+      server = spawn(process.execPath, ["bin/guardian-unit.mjs", "ui", ROOT, "--port", String(port), "--no-open"], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
       let startup = "";
-      await new Promise<void>((done, reject) => {
+      await within(new Promise<void>((done, reject) => {
         server.stdout.on("data", (chunk) => { startup += chunk; if (startup.includes("token=")) done(); });
         server.once("error", reject);
-      });
+        server.once("exit", (code) => reject(new Error(`dashboard exited during startup: ${code}`)));
+      }), 5_000, "dashboard startup");
       const token = /token=([0-9a-f-]+)/.exec(startup)?.[1];
       assert.ok(token);
-      const bad = await fetch(`http://127.0.0.1:${port}/api/browse?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "/tmp/AKIAIOSFODNN7EXAMPLE" }) });
+      const bad = await within(fetch(`http://127.0.0.1:${port}/api/browse?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: `/tmp/${secret}` }) }), 5_000, "dashboard JSON request");
       const badText = await bad.text();
-      assert.ok(!badText.includes("AKIAIOSFODNN7EXAMPLE"));
-      const scan = await fetch(`http://127.0.0.1:${port}/api/scan?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: join(ROOT, "examples/vulnerable-app"), network: true, domains: "ignored.example" }) });
-      const sse = await scan.text();
-      server.kill("SIGTERM");
-      assert.ok(!sse.includes("AKIAIOSFODNN7EXAMPLE") && !sse.includes("hunter2"));
+      assert.ok(!badText.includes(secret));
+      const scan = await within(fetch(`http://127.0.0.1:${port}/api/scan?token=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: secretTarget, network: true, domains: "ignored.example" }) }), 5_000, "dashboard SSE request");
+      const sse = await within(scan.text(), 5_000, "dashboard SSE response");
+      assert.ok(!sse.includes(secret) && !sse.includes("hunter2"));
+      const scanId = /"scanId":"([0-9a-f-]{36})"/.exec(sse)?.[1];
+      assert.ok(scanId);
+      const report = await within(fetch(`http://127.0.0.1:${port}/api/report/${scanId}.json?token=${token}`), 5_000, "dashboard report request");
+      assert.ok(!(await report.text()).includes(secret));
       const fetchLog = await readFile(log, "utf8").catch(() => "");
       assert.equal(fetchLog, "", `static entry point made outbound requests: ${fetchLog}`);
     } finally {
+      if (server && !server.killed) {
+        const closed = new Promise<void>((done) => server!.once("close", () => done()));
+        server.kill("SIGTERM");
+        const graceful = await within(closed, 2_000, "dashboard shutdown").then(() => true).catch(() => false);
+        if (!graceful) {
+          server.kill("SIGKILL");
+          await within(closed, 2_000, "forced dashboard shutdown");
+        }
+      }
+      await rm(secretTarget, { recursive: true, force: true });
       await rm(dir, { recursive: true, force: true });
     }
   });

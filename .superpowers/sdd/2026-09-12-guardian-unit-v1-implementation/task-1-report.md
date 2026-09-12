@@ -88,3 +88,26 @@ DONE
 - MCP framing remains JSON Lines: output is still one JSON-RPC document per line after redaction.
 - The no-outbound test uses real subprocess behavior and records every child-process `fetch` call; its log was empty for CLI, MCP, and dashboard static scans.
 - The internal `Engine` library can still accept an explicit `allowNetwork: true`; public CLI, dashboard, and MCP static scan paths continue to force it false.
+
+## Fix round 3/5 — persistence and adversarial public-boundary coverage
+
+### Changes
+
+- Redacted externally derived `target_id`, `target_label`, and finding location/file values before SQLite persistence, in addition to existing coverage, warnings, payload, and triage-note redaction.
+- Added explicit MCP boundary helpers for JSON-RPC serialization and stderr diagnostics; both use the centralized redaction primitives while preserving JSON Lines framing.
+- Strengthened dashboard integration to scan a secret-bearing target path, assert redacted SSE `started`/`done` output, and retrieve the actual JSON report path for the same scan.
+- Hardened dashboard-test lifecycle management: child reference is held outside the body, startup watches exit/error and has a timeout, requests are bounded, and `finally` always terminates then awaits graceful or forced closure. Timeout timers are cleared when the underlying operation settles.
+
+### Commands and exact results
+
+| Command | Result |
+| --- | --- |
+| `node --test test/core.test.ts` | PASS — 21 tests, 5 suites, 0 failures (626.027 ms). |
+| `npm test` | PASS — 21 tests, 5 suites, 0 failures (621.193 ms). |
+| `git diff --check` | PASS — no whitespace errors. |
+
+### Self-review
+
+- The raw SQLite-file regression uses secret-bearing target ID, target label, and finding file values; raw database bytes contain none of the sentinel.
+- MCP regression forces a raw secret through both final JSON-RPC and stderr diagnostic boundaries and parses the resulting JSON-RPC output.
+- Dashboard coverage now includes raw secret-bearing actual scan metadata in SSE and subsequent JSON report output, rather than only an API error path.

@@ -77,6 +77,16 @@ const TOOLS = [
 
 const SEV_RANK = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
+/** Public JSON-RPC boundary, exported for deterministic protocol testing. */
+export function serializeMcpMessage(message: Record<string, unknown>): string {
+  return safeJson(message);
+}
+
+/** Public diagnostic boundary; stdout framing is not available for notifications. */
+export function formatMcpDiagnostic(message: string): string {
+  return `guardian-unit-mcp: ${redact(message)}\n`;
+}
+
 /** Render findings as text an assistant can act on directly. */
 function renderFindings(findings: Finding[], coverage: { filesScanned: number; limitations: string[] }): string {
   findings = redactForOutput(findings);
@@ -142,7 +152,7 @@ export async function startMcpServer(): Promise<void> {
   const send = (message: Record<string, unknown>) => {
     // JSON-RPC framing remains one compact JSON document per line; only the
     // payload is transformed at this public-output boundary.
-    process.stdout.write(`${safeJson(message)}\n`);
+    process.stdout.write(`${serializeMcpMessage(message)}\n`);
   };
   const reply = (id: JsonRpcRequest["id"], result: unknown) =>
     send({ jsonrpc: "2.0", id, result });
@@ -276,7 +286,7 @@ export async function startMcpServer(): Promise<void> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (req.id !== undefined && req.id !== null) fail(req.id, -32603, message);
-      else process.stderr.write(`guardian-unit-mcp: ${redact(message)}\n`);
+      else process.stderr.write(formatMcpDiagnostic(message));
     }
   }
 }

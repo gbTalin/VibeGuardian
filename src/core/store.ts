@@ -95,8 +95,8 @@ export class Store {
     try {
       insertScan.run(
         result.scanId,
-        result.target.id,
-        result.target.label,
+        redact(result.target.id),
+        redact(result.target.label),
         result.startedAt,
         result.finishedAt,
         result.durationMs,
@@ -110,7 +110,7 @@ export class Store {
           f.id,
           f.ruleId,
           f.severity,
-          f.location?.file ?? null,
+          f.location?.file ? redact(f.location.file) : null,
           JSON.stringify(redactForOutput(f)),
         );
       }
