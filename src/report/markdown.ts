@@ -1,6 +1,7 @@
 import type { Finding, ScanResult, Severity } from "../core/types.ts";
 import { countBySeverity, postureLabel } from "../core/finding.ts";
 import { redactForOutput } from "../core/redact.ts";
+import type { GateDecision } from "../gate/types.ts";
 
 /**
  * Human-readable report.
@@ -76,7 +77,7 @@ function findingSection(f: Finding, index: number): string {
   return lines.join("\n");
 }
 
-export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): string {
+export function toMarkdown(result: ScanResult, opts: { title?: string; gate?: GateDecision } = {}): string {
   result = redactForOutput(result);
   const counts = countBySeverity(result.findings);
   const posture = postureLabel(counts);
@@ -101,6 +102,19 @@ export function toMarkdown(result: ScanResult, opts: { title?: string } = {}): s
     `| **Total** | **${result.findings.length}** |`,
     "",
   ];
+
+  if (opts.gate) {
+    out.push(
+      "## Release decision",
+      "",
+      `**${opts.gate.outcome}.** ${opts.gate.reasons[0] ?? "Required checks completed with no policy finding."}`,
+      "",
+      `- Blocking findings: ${opts.gate.blockingFindings.length}`,
+      `- Non-blocking findings: ${opts.gate.warningFindings.length}`,
+      `- Required evidence failures: ${opts.gate.requiredFailures.length}`,
+      "",
+    );
+  }
 
   if (open.length > 0) {
     out.push("## Findings", "", "Worst first. Fix in this order.", "");

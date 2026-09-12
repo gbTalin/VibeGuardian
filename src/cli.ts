@@ -1,6 +1,8 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { stdout } from "node:process";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import { buildEngine, ALL_SCANNERS } from "./scanners/index.ts";
 import { loadConfig, saveConfig, privacyPosture, type GuardianUnitConfig } from "./core/config.ts";
 import { Store } from "./core/store.ts";
@@ -13,6 +15,11 @@ import { countBySeverity, rank } from "./core/finding.ts";
 import { safeJson } from "./core/redact.ts";
 import { PRODUCT, TAGLINE, VERSION } from "./version.ts";
 import type { Severity } from "./core/types.ts";
+import { runGate } from "./gate/run.ts";
+import { canonicalJson, sha256 } from "./gate/receipt.ts";
+import type { ApprovalMetadata, CommitMetadata, ReleasePolicy } from "./gate/types.ts";
+
+const execFile = promisify(execFileCallback);
 
 const useColor = stdout.isTTY && !process.env.NO_COLOR;
 const c = (code: string, s: string) => (useColor ? `\x1b[${code}m${s}\x1b[0m` : s);
@@ -56,6 +63,7 @@ function help(): string {
     "",
     `    guardian-unit                      Open the dashboard in your browser`,
     `    guardian-unit scan [path]          Scan a folder and print the results`,
+    `    guardian-unit gate [path]          Run the deterministic release decision`,
     `    guardian-unit ui [path]            Open the dashboard for a specific folder`,
     `    guardian-unit setup                Choose a model for the agent review layer`,
     `    guardian-unit doctor               Check that everything is working`,
@@ -72,6 +80,16 @@ function help(): string {
     `    --json                       Print raw JSON to stdout`,
     `    --ci                         Exit non-zero if anything at --fail-on or worse`,
     `    --fail-on high               critical | high | medium | low | never`,
+    "",
+    `  ${c("1", "Gate options")}`,
+    "",
+    `    --target https://app.example.com  Exact authorized origin (probe support follows in a later release)`,
+    `    --authorization targets.json      Approval record to fingerprint locally`,
+    `    --policy policy.json              Release-policy override`,
+    `    --receipt receipt.json            Write canonical release receipt`,
+    `    --sarif out.sarif                 Write SARIF with the release decision`,
+    `    --markdown report.md              Write Markdown with the release decision`,
+    `    --json                            Print scan, decision, and receipt JSON`,
     "",
     `  ${c("1", "Privacy")}`,
     "",
@@ -212,6 +230,101 @@ async function cmdScan(args: Args): Promise<number> {
     return 1;
   }
   return 0;
+}
+
+function exactOrigin(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("REFUSED: --target must be an exact http(s) origin.");
+  }
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
+    parsed.origin !== value
+  ) {
+    throw new Error("REFUSED: --target must be an exact http(s) origin.");
+  }
+  return parsed.origin;
+}
+
+async function approvalFor(args: Args): Promise<ApprovalMetadata | undefined> {
+  const target = typeof args.flags.target === "string" ? exactOrigin(args.flags.target) : undefined;
+  const authorization = typeof args.flags.authorization === "string" ? args.flags.authorization : undefined;
+  if (!target && !authorization) return undefined;
+  if (!target || !authorization) throw new Error("REFUSED: --target and --authorization must be supplied together.");
+  try {
+    return { target, digest: sha256(await readFile(authorization, "utf8")) };
+  } catch {
+    throw new Error("REFUSED: authorization record could not be read.");
+  }
+}
+
+async function policyFor(args: Args): Promise<Partial<ReleasePolicy> | undefined> {
+  if (typeof args.flags.policy !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(await readFile(args.flags.policy, "utf8")) as Record<string, unknown>;
+    const blockAtOrAbove = parsed.blockAtOrAbove;
+    if (
+      (blockAtOrAbove !== undefined && !["critical", "high", "medium", "low", "info"].includes(String(blockAtOrAbove))) ||
+      (parsed.version !== undefined && typeof parsed.version !== "string")
+    ) {
+      throw new Error("invalid policy");
+    }
+    return {
+      ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
+      ...(blockAtOrAbove !== undefined ? { blockAtOrAbove: blockAtOrAbove as Severity } : {}),
+    };
+  } catch {
+    throw new Error("Invalid --policy file. Expected JSON with optional version and blockAtOrAbove fields.");
+  }
+}
+
+async function commitFor(root: string): Promise<CommitMetadata> {
+  try {
+    const [{ stdout: sha }, { stdout: status }] = await Promise.all([
+      execFile("git", ["rev-parse", "HEAD"], { cwd: root }),
+      execFile("git", ["status", "--porcelain"], { cwd: root }),
+    ]);
+    return { sha: sha.trim(), dirty: status.trim().length > 0 };
+  } catch {
+    return { sha: process.env.GITHUB_SHA ?? "UNPROVEN", dirty: true };
+  }
+}
+
+async function cmdGate(args: Args): Promise<number> {
+  const target = resolve(args._[1] ?? process.cwd());
+  try {
+    const [approval, policy, commit] = await Promise.all([approvalFor(args), policyFor(args), commitFor(target)]);
+    const gate = await runGate({ root: target, approval, policy, commit });
+    if (args.flags.json) {
+      stdout.write(`${safeJson({ scan: gate.scan, decision: gate.decision, receipt: gate.receipt, exitCode: gate.exitCode })}\n`);
+    } else {
+      stdout.write(toTerminal(gate.scan, useColor));
+      stdout.write(`  Release decision: ${gate.decision.outcome} (exit ${gate.exitCode})\n`);
+      for (const reason of gate.decision.reasons) stdout.write(`  - ${reason}\n`);
+      stdout.write("\n");
+    }
+    if (typeof args.flags.receipt === "string") await writeFile(args.flags.receipt, `${canonicalJson(gate.receipt)}\n`);
+    if (typeof args.flags.sarif === "string") await writeFile(args.flags.sarif, toSarif(gate.scan, { gate: gate.decision }));
+    if (typeof args.flags.markdown === "string") await writeFile(args.flags.markdown, toMarkdown(gate.scan, { gate: gate.decision }));
+    return gate.exitCode;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const refused = message.startsWith("REFUSED:");
+    const exitCode = refused ? 4 : 5;
+    if (args.flags.json) {
+      stdout.write(`${safeJson({ outcome: "HOLD", termination: refused ? "REFUSED" : "ERROR", exitCode, message })}\n`);
+    } else {
+      stdout.write(`  Release gate ${refused ? "refused" : "failed"}: ${message}\n`);
+    }
+    return exitCode;
+  }
 }
 
 async function cmdAgents(): Promise<number> {
@@ -372,6 +485,9 @@ async function main(): Promise<void> {
     case "scan":
       code = await cmdScan(args);
       break;
+    case "gate":
+      code = await cmdGate(args);
+      break;
     case "ui":
     case "serve":
     case "dashboard": {
@@ -413,5 +529,5 @@ async function main(): Promise<void> {
 main().catch((err) => {
   process.stderr.write(`\n  ${c("1;31", "Guardian-Unit-Penetration-Testing Agent hit an error:")} ${err instanceof Error ? err.message : String(err)}\n\n`);
   if (process.env.GUARDIAN_UNIT_DEBUG) console.error(err);
-  process.exitCode = 2;
+  process.exitCode = 5;
 });
